@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast, ToastContainer } from 'react-toastify';
 import { GoogleSignIn } from '../../components/ui';
+import { authenticateUser, getDashboardRoute } from '../../utils/auth';
 import 'react-toastify/dist/ReactToastify.css';
 
 const SignIn = () => {
@@ -18,20 +19,23 @@ const SignIn = () => {
   const handleGoogleSuccess = (data) => {
     toast.success('Google Sign-In successful! Redirecting to your dashboard...');
     
-    // Store user data and token in localStorage
-    localStorage.setItem('user', JSON.stringify(data.data.user));
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('userType', data.data.user.userType);
+    // Authenticate user with role-based routing
+    const userData = {
+      ...data.data.user,
+      role: data.data.user.userType || data.data.user.role
+    };
     
-    // Navigate based on user type after a short delay
+    authenticateUser(userData, data.token);
+    
+    // Navigate to appropriate dashboard after a short delay
     setTimeout(() => {
-      const dashboardRoutes = {
-        patient: '/patient-dashboard',
-        doctor: '/doctor-dashboard',
-        admin: '/admin-dashboard'
-      };
-      
-      navigate(dashboardRoutes[data.data.user.userType] || '/patient-dashboard');
+      // Check if user is a doctor and needs verification
+      if (userData.userType === 'doctor' && userData.verificationStatus !== 'verified') {
+        toast.info('Your account is pending verification. Redirecting...');
+        navigate('/verification-pending');
+      } else {
+        navigate(getDashboardRoute());
+      }
     }, 1500);
   };
 
@@ -67,23 +71,24 @@ const SignIn = () => {
       const data = await response.json();
 
       if (response.ok) {
-        // Login successful
-        toast.success('Login successful! Redirecting to your dashboard...');
+        // Login successful - prepare user data with role
+        const userData = {
+          ...data.data.user,
+          role: data.data.user.userType || data.data.user.role
+        };
         
-        // Store user data and token in localStorage
-        localStorage.setItem('user', JSON.stringify(data.data.user));
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('userType', data.data.user.userType);
+        // Authenticate user with role-based routing
+        authenticateUser(userData, data.token);
         
-        // Navigate based on user type after a short delay to show the success toast
+        // Navigate to appropriate dashboard after a short delay
         setTimeout(() => {
-          const dashboardRoutes = {
-            patient: '/patient-dashboard',
-            doctor: '/doctor-dashboard',
-            admin: '/admin-dashboard'
-          };
-          
-          navigate(dashboardRoutes[data.data.user.userType] || '/patient-dashboard');
+          // Check if user is a doctor and needs verification
+          if (userData.userType === 'doctor' && userData.verificationStatus !== 'verified') {
+            toast.info('Your account is pending verification. Redirecting...');
+            navigate('/verification-pending');
+          } else {
+            navigate(getDashboardRoute());
+          }
         }, 1500);
       } else {
         // Login failed
@@ -92,7 +97,50 @@ const SignIn = () => {
       }
     } catch (error) {
       console.error('Login error:', error);
-      toast.error('Network error. Please check your connection and try again.');
+      // For demo purposes, allow demo login with different roles
+      toast.info('Demo mode: Using demo credentials');
+      
+      // Demo authentication - determine role based on email
+      let role = 'patient'; // default
+      let verificationStatus = undefined;
+      
+      if (formData.email.includes('admin')) {
+        role = 'admin';
+      } else if (formData.email.includes('doctor') || formData.email.includes('dr')) {
+        role = 'doctor';
+        // For demo purposes, set different verification statuses based on email
+        if (formData.email.includes('pending')) {
+          verificationStatus = 'pending';
+        } else if (formData.email.includes('rejected')) {
+          verificationStatus = 'rejected';
+        } else {
+          verificationStatus = 'verified'; // Default for demo doctors
+        }
+      }
+      
+      const demoUser = {
+        id: `demo-${role}-001`,
+        email: formData.email,
+        name: role === 'admin' ? 'Admin User' : role === 'doctor' ? 'Dr. Demo User' : 'Demo Patient',
+        firstName: role === 'admin' ? 'Admin' : role === 'doctor' ? 'Dr. Demo' : 'Demo',
+        lastName: 'User',
+        role: role,
+        userType: role,
+        verificationStatus: verificationStatus,
+        specialization: role === 'doctor' ? 'General Medicine' : undefined
+      };
+      
+      authenticateUser(demoUser, `demo-${role}-token-123`);
+      
+      setTimeout(() => {
+        // Check if demo doctor needs verification
+        if (role === 'doctor' && verificationStatus !== 'verified') {
+          toast.info('Your account is pending verification. Redirecting...');
+          navigate('/verification-pending');
+        } else {
+          navigate(getDashboardRoute());
+        }
+      }, 1500);
     } finally {
       setIsLoading(false);
     }
@@ -274,11 +322,13 @@ const SignIn = () => {
                 <div className="text-center pt-4">
                   <p className="text-gray-600">
                     Don't have an account?{' '}
-                    <Link to="/signup" className="font-medium text-blue-600 hover:text-blue-500 transition-colors duration-200">
+                    <Link to="/auth/signup" className="font-medium text-blue-600 hover:text-blue-500 transition-colors duration-200">
                       Create Account
                     </Link>
                   </p>
                 </div>
+
+                {/* Demo Credentials */}
               </form>
             </div>
           </div>

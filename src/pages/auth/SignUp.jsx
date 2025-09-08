@@ -32,6 +32,13 @@ const SignUp = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [touched, setTouched] = useState({});
+  
+  // Email verification states
+  const [isEmailVerificationStep, setIsEmailVerificationStep] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [isOtpLoading, setIsOtpLoading] = useState(false);
+  const [otpTimer, setOtpTimer] = useState(0);
+  const [resendDisabled, setResendDisabled] = useState(false);
 
   const handleGoogleSuccess = (data) => {
     toast.success('Google Sign-Up successful! Redirecting to your dashboard...');
@@ -55,6 +62,220 @@ const SignUp = () => {
 
   const handleGoogleError = (error) => {
     toast.error(error || 'Google Sign-Up failed. Please try again.');
+  };
+
+  // Email verification functions
+  const sendOtp = async (email) => {
+    try {
+      setIsOtpLoading(true);
+      
+      const response = await fetch('http://localhost:3001/api/auth/send-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        toast.success('OTP sent to your email successfully!');
+        startOtpTimer();
+        return true;
+      } else {
+        toast.error(data.message || 'Failed to send OTP. Please try again.');
+        return false;
+      }
+    } catch (error) {
+      console.error('Send OTP error:', error);
+      toast.error('Network error. Please check your connection and try again.');
+      return false;
+    } finally {
+      setIsOtpLoading(false);
+    }
+  };
+
+  const verifyOtp = async (email, otpCode) => {
+    try {
+      setIsOtpLoading(true);
+      
+      console.log('🔍 Verifying OTP:', { email, otp: otpCode });
+      
+      const response = await fetch('http://localhost:3001/api/auth/verify-email-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, otp: otpCode }),
+      });
+
+      const data = await response.json();
+      
+      console.log('📡 OTP verification response:', { 
+        status: response.status, 
+        ok: response.ok, 
+        data 
+      });
+
+      if (response.ok) {
+        toast.success('Email verified successfully!');
+        console.log('✅ Email verification successful');
+        return true;
+      } else {
+        console.log('❌ Email verification failed:', data.message);
+        toast.error(data.message || 'Invalid OTP. Please try again.');
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Verify OTP error:', error);
+      toast.error('Network error. Please check your connection and try again.');
+      return false;
+    } finally {
+      setIsOtpLoading(false);
+    }
+  };
+
+  const startOtpTimer = () => {
+    setOtpTimer(60); // 60 seconds countdown
+    setResendDisabled(true);
+    
+    const timer = setInterval(() => {
+      setOtpTimer((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setResendDisabled(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleResendOtp = async () => {
+    if (!resendDisabled) {
+      await sendOtp(formData.email);
+    }
+  };
+
+  const handleOtpVerification = async (e) => {
+    e.preventDefault();
+    
+    if (!otp || otp.trim().length !== 6) {
+      toast.error('Please enter a valid 6-digit OTP');
+      return;
+    }
+
+    const isValid = await verifyOtp(formData.email, otp);
+    if (isValid) {
+      // Proceed with registration
+      await completeRegistration();
+    }
+  };
+
+  const completeRegistration = async () => {
+    setIsLoading(true);
+    
+    try {
+      console.log('🚀 Starting registration process with data:', {
+        email: formData.email,
+        userType: formData.userType,
+        emailVerified: true
+      });
+      
+      // Make API call to backend for final registration
+      const response = await fetch('http://localhost:3001/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          email: formData.email,
+          password: formData.password,
+          confirmPassword: formData.confirmPassword,
+          phone: formData.phone,
+          userType: formData.userType,
+          // Patient specific fields
+          dateOfBirth: formData.dateOfBirth,
+          gender: formData.gender,
+          bloodGroup: formData.bloodGroup,
+          knownAllergies: formData.knownAllergies,
+          // Doctor specific fields
+          medicalLicenseNumber: formData.medicalLicenseNumber,
+          specialization: formData.specialization === 'other' ? formData.otherSpecialization : formData.specialization,
+          experience: formData.experience,
+          emailVerified: true, // Mark as email verified
+        }),
+      });
+
+      const data = await response.json();
+      
+      console.log('📡 Registration response:', { 
+        status: response.status, 
+        ok: response.ok, 
+        data 
+      });
+
+      if (response.ok) {
+        // Registration successful
+        console.log('✅ Registration successful, storing user data');
+        toast.success('Registration successful! Redirecting...');
+        
+        // Store user data and token in localStorage
+        localStorage.setItem('user', JSON.stringify(data.data.user));
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('userType', data.data.user.userType);
+        
+        console.log('💾 User data stored in localStorage');
+        
+        // Navigate based on user type and verification status
+        setTimeout(() => {
+          const userType = data.data.user.userType;
+          
+          if (userType === 'doctor') {
+            // Check verification status for doctors
+            if (data.data.user.verificationStatus === 'pending') {
+              console.log('🧭 Redirecting doctor to verification pending page');
+              navigate('/verification-pending');
+            } else if (data.data.user.verificationStatus === 'verified') {
+              console.log('🧭 Redirecting verified doctor to dashboard');
+              navigate('/doctor-dashboard');
+            } else {
+              console.log('🧭 Doctor verification rejected, redirecting to pending page');
+              navigate('/verification-pending');
+            }
+          } else {
+            // For patients and admins, go directly to dashboard
+            const dashboardRoutes = {
+              patient: '/patient-dashboard',
+              admin: '/admin-dashboard'
+            };
+            
+            console.log('🧭 Navigating to dashboard:', dashboardRoutes[userType]);
+            navigate(dashboardRoutes[userType] || '/patient-dashboard');
+          }
+        }, 1500);
+        
+      } else {
+        // Registration failed
+        const errorMessage = data.message || 'Registration failed. Please try again.';
+        console.log('❌ Registration failed:', errorMessage);
+        toast.error(errorMessage);
+        // Go back to form if registration fails
+        setIsEmailVerificationStep(false);
+        setOtp('');
+      }
+    } catch (error) {
+      console.error('❌ Registration error:', error);
+      toast.error('Network error. Please check your connection and try again.');
+      // Go back to form if network error
+      setIsEmailVerificationStep(false);
+      setOtp('');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Validation functions
@@ -205,70 +426,17 @@ const SignUp = () => {
         return;
       }
     }
-    
-    setIsLoading(true);
-    
-    try {
-      // Make API call to backend
-      const response = await fetch('http://localhost:3001/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          password: formData.password,
-          confirmPassword: formData.confirmPassword,
-          phone: formData.phone,
-          userType: formData.userType,
-          // Patient specific fields
-          dateOfBirth: formData.dateOfBirth,
-          gender: formData.gender,
-          bloodGroup: formData.bloodGroup,
-          knownAllergies: formData.knownAllergies,
-          // Doctor specific fields
-          medicalLicenseNumber: formData.medicalLicenseNumber,
-          specialization: formData.specialization === 'other' ? formData.otherSpecialization : formData.specialization,
-          experience: formData.experience,
-          // Note: verificationDocument file will be handled separately after registration
-        }),
-      });
 
-      const data = await response.json();
-
-      if (response.ok) {
-        // Registration successful
-        toast.success('Registration successful! Redirecting to your dashboard...');
-        
-        // Store user data and token in localStorage
-        localStorage.setItem('user', JSON.stringify(data.data.user));
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('userType', data.data.user.userType);
-        
-        // Navigate based on user type after a short delay to show the success toast
-        setTimeout(() => {
-          const dashboardRoutes = {
-            patient: '/patient-dashboard',
-            doctor: '/doctor-dashboard',
-            admin: '/admin-dashboard'
-          };
-          
-          const userType = data.data.user.userType;
-          navigate(dashboardRoutes[userType] || '/patient-dashboard');
-        }, 1500);
-        
-      } else {
-        // Registration failed
-        const errorMessage = data.message || 'Registration failed. Please try again.';
-        toast.error(errorMessage);
-      }
-    } catch (error) {
-      console.error('Registration error:', error);
-      toast.error('Network error. Please check your connection and try again.');
-    } finally {
-      setIsLoading(false);
+    // Validate email format
+    if (!validateEmail(formData.email)) {
+      toast.error('Please enter a valid email address');
+      return;
+    }
+    
+    // Send OTP to email and proceed to verification step
+    const otpSent = await sendOtp(formData.email);
+    if (otpSent) {
+      setIsEmailVerificationStep(true);
     }
   };
 
@@ -316,7 +484,101 @@ const SignUp = () => {
                 <p className="text-gray-600 text-lg">Create your account and start your healthcare journey</p>
               </div>
 
-              {/* Sign Up Form */}
+              {/* Email Verification Step */}
+              {isEmailVerificationStep ? (
+                <div className="space-y-6">
+                  <div className="text-center">
+                    <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-green-500 via-emerald-600 to-teal-600 rounded-2xl shadow-xl mb-6">
+                      <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">Verify Your Email</h3>
+                    <p className="text-gray-600 mb-4">
+                      We've sent a 6-digit verification code to
+                    </p>
+                    <p className="text-blue-600 font-semibold text-lg mb-6">
+                      {formData.email}
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleOtpVerification} className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="flex items-center text-sm font-semibold text-gray-800 tracking-wide">
+                        <svg className="w-4 h-4 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Verification Code
+                      </label>
+                      <input
+                        type="text"
+                        name="otp"
+                        value={otp}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                          setOtp(value);
+                        }}
+                        placeholder="Enter 6-digit code"
+                        maxLength="6"
+                        className="w-full px-4 py-3 text-center text-2xl font-bold tracking-widest border border-gray-300 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 bg-white/80 backdrop-blur-sm"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex flex-col space-y-4">
+                      <button
+                        type="submit"
+                        disabled={isOtpLoading || otp.length !== 6}
+                        className="w-full flex justify-center py-3 px-4 border border-transparent rounded-2xl shadow-lg text-sm font-medium text-white bg-gradient-to-r from-blue-600 via-purple-600 to-blue-700 hover:from-blue-700 hover:via-purple-700 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-[1.02] hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                      >
+                        {isOtpLoading ? (
+                          <div className="flex items-center">
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Verifying...
+                          </div>
+                        ) : (
+                          'Verify Email & Complete Registration'
+                        )}
+                      </button>
+
+                      <div className="text-center">
+                        <p className="text-sm text-gray-600 mb-2">
+                          Didn't receive the code?
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleResendOtp}
+                          disabled={resendDisabled || isOtpLoading}
+                          className="text-blue-600 hover:text-blue-800 font-medium disabled:text-gray-400 disabled:cursor-not-allowed transition-colors duration-200"
+                        >
+                          {resendDisabled ? (
+                            `Resend in ${otpTimer}s`
+                          ) : (
+                            'Resend Code'
+                          )}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsEmailVerificationStep(false);
+                          setOtp('');
+                          setOtpTimer(0);
+                          setResendDisabled(false);
+                        }}
+                        className="w-full py-2 px-4 border border-gray-300 rounded-2xl text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-all duration-300"
+                      >
+                        ← Back to Form
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                /* Sign Up Form */
               <form onSubmit={handleSubmit} className="space-y-6">
                 {/* User Type Selection */}
                 <div className="space-y-2">
@@ -1046,6 +1308,7 @@ const SignUp = () => {
                   </p>
                 </div>
               </form>
+              )}
             </div>
           </div>
         </div>
