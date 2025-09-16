@@ -1,21 +1,6 @@
 import { toast } from 'react-toastify';
 
 /**
- * Authenticate user by storing data in localStorage
- * @param {object} userData - User data including role
- * @param {string} token - JWT token
- * @param {boolean} showWelcome - Whether to show welcome message
- */
-export const authenticateUser = (userData, token, showWelcome = true) => {
-  localStorage.setItem('user', JSON.stringify(userData));
-  localStorage.setItem('token', token);
-  
-  if (showWelcome) {
-    toast.success(`Welcome ${userData.name || userData.firstName || 'User'}!`);
-  }
-};
-
-/**
  * Utility function to handle user logout
  * @param {function} navigate - React Router navigate function
  */
@@ -234,7 +219,7 @@ export const requireRole = (navigate, requiredRole) => {
 
 /**
  * Get dashboard route based on user role
- * @returns {string} Dashboard route path
+ * @returns {string} Dashboard route for user's role
  */
 export const getDashboardRoute = () => {
   const userRole = getUserRole();
@@ -248,6 +233,17 @@ export const getDashboardRoute = () => {
     default:
       return '/auth/signin';
   }
+};
+
+/**
+ * Authenticate user with credentials and role
+ * @param {object} userData - User data including role
+ * @param {string} token - JWT token
+ */
+export const authenticateUser = (userData, token) => {
+  localStorage.setItem('user', JSON.stringify(userData));
+  localStorage.setItem('token', token);
+  toast.success(`Welcome ${userData.name || userData.firstName || 'User'}!`);
 };
 
 /**

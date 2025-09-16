@@ -91,7 +91,7 @@ const DoctorDashboard = () => {
           return;
         }
 
-        // Check doctor verification status
+        // Load doctor data from backend
         const token = localStorage.getItem('token');
         
         try {
@@ -106,24 +106,10 @@ const DoctorDashboard = () => {
             const data = await response.json();
             const currentUser = data.data.user;
             
-            // Check if doctor is verified
-            if (currentUser.userType === 'doctor' && currentUser.verificationStatus !== 'verified') {
-              console.log('👨‍⚕️ Doctor not verified, redirecting to verification pending page');
-              navigate('/verification-pending');
-              return;
-            }
-            
             setUser(currentUser);
           } else {
             // Fallback to localStorage data if API fails
             console.log('⚠️ API failed, using localStorage data');
-            
-            // Check verification status from localStorage
-            if (userData.userType === 'doctor' && userData.verificationStatus !== 'verified') {
-              console.log('👨‍⚕️ Doctor not verified (localStorage), redirecting to verification pending page');
-              navigate('/verification-pending');
-              return;
-            }
             
             // For demo purposes, create mock doctor data if none exists or if role is missing
             let doctorData = userData;
@@ -149,13 +135,6 @@ const DoctorDashboard = () => {
           }
         } catch (apiError) {
           console.error('API request failed:', apiError);
-          
-          // Fallback to localStorage verification check
-          if (userData.userType === 'doctor' && userData.verificationStatus !== 'verified') {
-            console.log('👨‍⚕️ Doctor not verified (fallback), redirecting to verification pending page');
-            navigate('/verification-pending');
-            return;
-          }
           
           setUser(userData);
         }

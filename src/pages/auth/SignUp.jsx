@@ -230,32 +230,19 @@ const SignUp = () => {
         
         console.log('💾 User data stored in localStorage');
         
-        // Navigate based on user type and verification status
+        // Navigate based on user type
         setTimeout(() => {
           const userType = data.data.user.userType;
           
-          if (userType === 'doctor') {
-            // Check verification status for doctors
-            if (data.data.user.verificationStatus === 'pending') {
-              console.log('🧭 Redirecting doctor to verification pending page');
-              navigate('/verification-pending');
-            } else if (data.data.user.verificationStatus === 'verified') {
-              console.log('🧭 Redirecting verified doctor to dashboard');
-              navigate('/doctor-dashboard');
-            } else {
-              console.log('🧭 Doctor verification rejected, redirecting to pending page');
-              navigate('/verification-pending');
-            }
-          } else {
-            // For patients and admins, go directly to dashboard
-            const dashboardRoutes = {
-              patient: '/patient-dashboard',
-              admin: '/admin-dashboard'
-            };
-            
-            console.log('🧭 Navigating to dashboard:', dashboardRoutes[userType]);
-            navigate(dashboardRoutes[userType] || '/patient-dashboard');
-          }
+          // For all users, go directly to dashboard
+          const dashboardRoutes = {
+            patient: '/patient-dashboard',
+            doctor: '/doctor-dashboard',
+            admin: '/admin-dashboard'
+          };
+          
+          console.log('🧭 Navigating to dashboard:', dashboardRoutes[userType]);
+          navigate(dashboardRoutes[userType] || '/patient-dashboard');
         }, 1500);
         
       } else {

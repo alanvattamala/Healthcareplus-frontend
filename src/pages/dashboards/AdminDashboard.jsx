@@ -38,9 +38,11 @@ import {
   AcademicCapIcon,
   BanknotesIcon,
   BeakerIcon,
-  PencilIcon,
   TrashIcon,
-  PowerIcon
+  PowerIcon,
+  XCircleIcon,
+  ArrowPathIcon,
+  BoltIcon
 } from '@heroicons/react/24/outline';
 
 const AdminDashboard = () => {
@@ -72,6 +74,7 @@ const AdminDashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [filterUserType, setFilterUserType] = useState('');
   const [filterVerificationStatus, setFilterVerificationStatus] = useState('');
   const [filterActiveStatus, setFilterActiveStatus] = useState('');
@@ -197,6 +200,8 @@ const AdminDashboard = () => {
             ...userData,
             id: 'admin-001',
             name: 'Admin User',
+            firstName: 'Admin',
+            lastName: 'User',
             email: 'admin@healthcareplus.com',
             role: 'admin',
             avatar: '👨‍💼'
@@ -210,8 +215,9 @@ const AdminDashboard = () => {
         setUser(adminData);
         setIsLoading(false);
         
-        // Fetch pending doctors after authentication
+        // Fetch pending doctors and users after authentication
         fetchPendingDoctors();
+        fetchAllUsers();
       } catch (error) {
         console.error('Authentication check failed:', error);
         navigate('/auth/signin');
@@ -228,7 +234,16 @@ const AdminDashboard = () => {
       fetchAllUsers();
       fetchUserStats();
     }
-  }, [activeTab, filterUserType, filterVerificationStatus, filterActiveStatus]);
+  }, [activeTab, debouncedSearchTerm, filterUserType, filterVerificationStatus, filterActiveStatus]);
+
+  // Debounce search term
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   // Handle pagination
   useEffect(() => {
@@ -299,6 +314,7 @@ const AdminDashboard = () => {
         limit: limit.toString()
       });
       
+      if (debouncedSearchTerm) params.append('search', debouncedSearchTerm);
       if (filterUserType) params.append('userType', filterUserType);
       if (filterVerificationStatus) params.append('verificationStatus', filterVerificationStatus);
       if (filterActiveStatus) params.append('active', filterActiveStatus);
@@ -353,8 +369,9 @@ const AdminDashboard = () => {
   };
 
   const viewDoctorVerification = (doctor) => {
-    setSelectedDoctor(doctor);
-    setShowDoctorVerificationModal(true);
+    setActiveTab('doctors');
+    // Optional: You can also set the selected doctor if you want it to be highlighted
+    // setSelectedDoctor(doctor);
   };
 
   const blockUser = async (userId) => {
@@ -391,12 +408,6 @@ const AdminDashboard = () => {
       console.error('Error updating user status:', error);
       toast.error('Network error. Please try again.');
     }
-  };
-
-  const editUser = (user) => {
-    // Open user details modal for editing
-    setSelectedUser(user);
-    setShowUserModal(true);
   };
 
   const deleteUser = async (userId) => {
@@ -563,7 +574,7 @@ const AdminDashboard = () => {
             <div className="relative bg-gradient-to-r from-purple-600 via-blue-600 to-indigo-700 rounded-xl sm:rounded-2xl p-4 sm:p-8 overflow-hidden">
               <div className="relative z-10">
                 <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white mb-2">
-                  Welcome back, {user?.name}! 👨‍💼
+                  Welcome, {user?.firstName ? `${user.firstName} ${user.lastName}` : user?.name}! 
                 </h2>
                 <p className="text-purple-100 text-sm sm:text-base lg:text-lg">
                   System administration overview • {currentTime.toLocaleDateString()}
@@ -643,45 +654,85 @@ const AdminDashboard = () => {
             {/* Quick Actions */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 p-4 sm:p-6">
-                <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6 flex items-center">
-                  <span className="mr-2 sm:mr-3 text-xl sm:text-2xl">👥</span>
-                  Recent Users
-                </h3>
+                <div className="flex items-center justify-between mb-4 sm:mb-6">
+                  <h3 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center">
+                    <UserGroupIcon className="mr-2 sm:mr-3 w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
+                    Recent Users
+                  </h3>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setActiveTab('users')}
+                    className="text-xs sm:text-sm"
+                  >
+                    View All Users
+                  </Button>
+                </div>
                 <div className="space-y-4">
-                  {recentUsers.map((user) => (
-                    <div key={user.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                  {allUsers
+                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                    .slice(0, 2)
+                    .map((user) => (
+                    <div key={user._id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
                       <div className="flex items-center space-x-3">
                         <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white">
-                          {user.avatar}
+                          {user.userType === 'doctor' ? (
+                            <BeakerIcon className="w-5 h-5" />
+                          ) : user.userType === 'admin' ? (
+                            <IdentificationIcon className="w-5 h-5" />
+                          ) : (
+                            <UserIcon className="w-5 h-5" />
+                          )}
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900">{user.name}</p>
-                          <p className="text-sm text-gray-500">{user.type} • {user.lastLogin}</p>
+                          <p className="font-medium text-gray-900">{user.firstName} {user.lastName}</p>
+                          <p className="text-sm text-gray-500">
+                            {user.userType.charAt(0).toUpperCase() + user.userType.slice(1)} • 
+                            Joined {new Date(user.createdAt).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric'
+                            })}
+                          </p>
                         </div>
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => viewUserDetails(user)}
+                        onClick={() => setActiveTab('users')}
                       >
                         View Details
                       </Button>
                     </div>
                   ))}
+                  {allUsers.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      <p>No users found</p>
+                    </div>
+                  )}
                 </div>
               </Card>
 
               <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 p-4 sm:p-6">
-                <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6 flex items-center">
-                  <span className="mr-2 sm:mr-3 text-xl sm:text-2xl">⚠️</span>
-                  Pending Doctor Verifications
-                </h3>
+                <div className="flex items-center justify-between mb-4 sm:mb-6">
+                  <h3 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center">
+                    <ExclamationTriangleIcon className="mr-2 sm:mr-3 w-5 h-5 sm:w-6 sm:h-6 text-yellow-600" />
+                    Pending Doctor Verifications
+                  </h3>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setActiveTab('doctors')}
+                    className="text-xs sm:text-sm"
+                  >
+                    View All
+                  </Button>
+                </div>
                 <div className="space-y-4">
-                  {pendingDoctors.map((doctor) => (
+                  {pendingDoctors.slice(0, 2).map((doctor) => (
                     <div key={doctor._id} className="flex items-center justify-between p-4 bg-yellow-50 rounded-lg hover:bg-yellow-100 transition-colors">
                       <div className="flex items-center space-x-3">
                         <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
-                          👨‍⚕️
+                          <BeakerIcon className="w-5 h-5" />
                         </div>
                         <div>
                           <p className="font-medium text-gray-900">{`${doctor.firstName} ${doctor.lastName}`}</p>
@@ -902,30 +953,42 @@ const AdminDashboard = () => {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                user.verificationStatus === 'verified' || user.isEmailVerified === true
+                                user.verificationStatus === 'verified'
                                   ? 'bg-green-100 text-green-800'
-                                  : user.verificationStatus === 'pending' || user.isEmailVerified === false
+                                  : user.verificationStatus === 'pending'
                                   ? 'bg-yellow-100 text-yellow-800'
                                   : user.verificationStatus === 'rejected'
                                   ? 'bg-red-100 text-red-800'
+                                  : user.isEmailVerified === true
+                                  ? 'bg-green-100 text-green-800'
+                                  : user.isEmailVerified === false
+                                  ? 'bg-yellow-100 text-yellow-800'
                                   : 'bg-gray-100 text-gray-800'
                               }`}>
                                 <div className={`mr-1.5 h-2 w-2 rounded-full ${
-                                  user.verificationStatus === 'verified' || user.isEmailVerified === true
+                                  user.verificationStatus === 'verified'
                                     ? 'bg-green-400'
-                                    : user.verificationStatus === 'pending' || user.isEmailVerified === false
+                                    : user.verificationStatus === 'pending'
                                     ? 'bg-yellow-400'
                                     : user.verificationStatus === 'rejected'
                                     ? 'bg-red-400'
+                                    : user.isEmailVerified === true
+                                    ? 'bg-green-400'
+                                    : user.isEmailVerified === false
+                                    ? 'bg-yellow-400'
                                     : 'bg-gray-400'
                                 }`} />
-                                {user.verificationStatus === 'verified' || user.isEmailVerified === true
+                                {user.verificationStatus === 'verified'
                                   ? 'Verified'
-                                  : user.verificationStatus === 'pending' || user.isEmailVerified === false
+                                  : user.verificationStatus === 'pending'
                                   ? 'Pending'
                                   : user.verificationStatus === 'rejected'
                                   ? 'Rejected'
-                                  : 'N/A'
+                                  : user.isEmailVerified === true
+                                  ? 'Email Verified'
+                                  : user.isEmailVerified === false
+                                  ? 'Email Pending'
+                                  : 'Not Set'
                                 }
                               </span>
                             </td>
@@ -965,15 +1028,6 @@ const AdminDashboard = () => {
                                   )}
                                   {user.isActive !== false ? 'Deactivate' : 'Activate'}
                                 </Button>
-
-                                {/* Edit Button */}
-                                <button
-                                  onClick={() => editUser(user)}
-                                  className="inline-flex items-center justify-center w-8 h-8 rounded-full text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 transition-colors"
-                                  title="Edit User"
-                                >
-                                  <PencilIcon className="w-4 h-4" />
-                                </button>
 
                                 {/* Delete Button - Only show for non-admin users */}
                                 {user.userType !== 'admin' && (
@@ -1026,30 +1080,42 @@ const AdminDashboard = () => {
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex space-x-2">
                                 <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ${
-                                  user.verificationStatus === 'verified' || user.isEmailVerified === true
+                                  user.verificationStatus === 'verified'
                                     ? 'bg-green-100 text-green-800'
-                                    : user.verificationStatus === 'pending' || user.isEmailVerified === false
+                                    : user.verificationStatus === 'pending'
                                     ? 'bg-yellow-100 text-yellow-800'
                                     : user.verificationStatus === 'rejected'
                                     ? 'bg-red-100 text-red-800'
+                                    : user.isEmailVerified === true
+                                    ? 'bg-green-100 text-green-800'
+                                    : user.isEmailVerified === false
+                                    ? 'bg-yellow-100 text-yellow-800'
                                     : 'bg-gray-100 text-gray-800'
                                 }`}>
                                   <div className={`mr-1 h-1.5 w-1.5 rounded-full ${
-                                    user.verificationStatus === 'verified' || user.isEmailVerified === true
+                                    user.verificationStatus === 'verified'
                                       ? 'bg-green-400'
-                                      : user.verificationStatus === 'pending' || user.isEmailVerified === false
+                                      : user.verificationStatus === 'pending'
                                       ? 'bg-yellow-400'
                                       : user.verificationStatus === 'rejected'
                                       ? 'bg-red-400'
+                                      : user.isEmailVerified === true
+                                      ? 'bg-green-400'
+                                      : user.isEmailVerified === false
+                                      ? 'bg-yellow-400'
                                       : 'bg-gray-400'
                                   }`} />
-                                  {user.verificationStatus === 'verified' || user.isEmailVerified === true
+                                  {user.verificationStatus === 'verified'
                                     ? 'Verified'
-                                    : user.verificationStatus === 'pending' || user.isEmailVerified === false
+                                    : user.verificationStatus === 'pending'
                                     ? 'Pending'
                                     : user.verificationStatus === 'rejected'
                                     ? 'Rejected'
-                                    : 'N/A'
+                                    : user.isEmailVerified === true
+                                    ? 'Email Verified'
+                                    : user.isEmailVerified === false
+                                    ? 'Email Pending'
+                                    : 'Not Set'
                                   }
                                 </span>
                                 <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ${
@@ -1086,15 +1152,6 @@ const AdminDashboard = () => {
                                 )}
                                 {user.isActive !== false ? 'Deactivate' : 'Activate'}
                               </Button>
-
-                              {/* Edit Button */}
-                              <button
-                                onClick={() => editUser(user)}
-                                className="inline-flex items-center justify-center w-8 h-8 rounded-full text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 transition-colors"
-                                title="Edit User"
-                              >
-                                <PencilIcon className="w-4 h-4" />
-                              </button>
 
                               {/* Delete Button - Only show for non-admin users */}
                               {user.userType !== 'admin' && (
@@ -1161,17 +1218,297 @@ const AdminDashboard = () => {
       case 'doctors':
         return (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-2 sm:mr-3 text-2xl sm:text-3xl">👩‍⚕️</span>
-                Doctor Management
+            <div className="flex flex-col space-y-3 sm:flex-row sm:justify-between sm:items-center sm:space-y-0">
+              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900 flex items-center">
+                <BeakerIcon className="mr-2 w-5 h-5 sm:w-6 sm:h-6 lg:w-7 lg:h-7 text-purple-600" />
+                <span className="hidden sm:inline">Doctor Verification Management</span>
+                <span className="sm:hidden">Doctor Verification</span>
               </h2>
-              <Button className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700">
-                ➕ Add Doctor
-              </Button>
+              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+                <div className="bg-yellow-100 text-yellow-800 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-center">
+                  {pendingDoctors.length} Pending Verification{pendingDoctors.length !== 1 ? 's' : ''}
+                </div>
+                <Button 
+                  onClick={fetchPendingDoctors}
+                  className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-xs sm:text-sm px-3 sm:px-4 py-2"
+                >
+                  <ArrowPathIcon className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Refresh</span>
+                </Button>
+              </div>
             </div>
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl p-6">
-              <p className="text-gray-600">Doctor management interface will be implemented here.</p>
+
+            {/* Pending Doctor Verifications Table */}
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl">
+              <div className="p-3 sm:p-6">
+                <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-4 flex items-center">
+                  <ExclamationTriangleIcon className="mr-2 w-4 h-4 sm:w-5 sm:h-5 text-yellow-600" />
+                  Pending Doctor Verification Requests
+                </h3>
+                
+                {pendingDoctors.length === 0 ? (
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <BeakerIcon className="w-8 h-8 text-gray-400" />
+                    </div>
+                    <p className="text-gray-500 text-lg">No pending doctor verifications</p>
+                    <p className="text-gray-400 text-sm mt-1">All doctor applications have been processed</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Desktop Table */}
+                    <div className="hidden lg:block overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-gray-200">
+                            <th className="text-left py-3 px-4 font-semibold text-gray-700">Doctor Info</th>
+                            <th className="text-left py-3 px-4 font-semibold text-gray-700">Specialization</th>
+                            <th className="text-left py-3 px-4 font-semibold text-gray-700">License & Experience</th>
+                            <th className="text-left py-3 px-4 font-semibold text-gray-700">Registration Date</th>
+                            <th className="text-left py-3 px-4 font-semibold text-gray-700">Status</th>
+                            <th className="text-center py-3 px-4 font-semibold text-gray-700">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pendingDoctors.map((doctor) => (
+                            <tr key={doctor._id} className="border-b border-gray-100 hover:bg-gray-50">
+                              <td className="py-4 px-4">
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg">
+                                    <BeakerIcon className="w-6 h-6" />
+                                  </div>
+                                  <div>
+                                    <div className="font-semibold text-gray-900">
+                                      Dr. {doctor.firstName} {doctor.lastName}
+                                    </div>
+                                    <div className="text-sm text-gray-500">{doctor.email}</div>
+                                    <div className="text-sm text-gray-500">{doctor.phone}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-4 px-4">
+                                <div className="font-medium text-gray-900">{doctor.specialization}</div>
+                                {doctor.consultationFee && (
+                                  <div className="text-sm text-green-600 font-medium">
+                                    Fee: ${doctor.consultationFee}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-4 px-4">
+                                <div className="space-y-1">
+                                  <div className="text-sm">
+                                    <span className="font-medium text-gray-700">License:</span>
+                                    <span className="ml-1 font-mono text-blue-600">
+                                      {doctor.medicalLicenseNumber}
+                                    </span>
+                                  </div>
+                                  <div className="text-sm">
+                                    <span className="font-medium text-gray-700">Experience:</span>
+                                    <span className="ml-1 text-gray-600">{doctor.experience}</span>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-4 px-4">
+                                <div className="text-sm text-gray-600">
+                                  {new Date(doctor.createdAt).toLocaleDateString('en-US', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric'
+                                  })}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {new Date(doctor.createdAt).toLocaleTimeString('en-US', {
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })}
+                                </div>
+                              </td>
+                              <td className="py-4 px-4">
+                                <span className="inline-flex px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                  {doctor.verificationStatus === 'pending' ? 'Pending Review' : doctor.verificationStatus}
+                                </span>
+                              </td>
+                              <td className="py-4 px-4">
+                                <div className="flex items-center justify-center space-x-2">
+                                  {/* View Details Button */}
+                                  <button
+                                    onClick={() => {
+                                      setSelectedDoctor(doctor);
+                                      setShowDoctorVerificationModal(true);
+                                    }}
+                                    className="inline-flex items-center justify-center w-8 h-8 rounded-full text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 transition-colors"
+                                    title="View Details"
+                                  >
+                                    <EyeIcon className="w-4 h-4" />
+                                  </button>
+
+                                  {/* Quick Approve Button */}
+                                  <button
+                                    onClick={() => approveDoctor(doctor._id)}
+                                    className="inline-flex items-center justify-center w-8 h-8 rounded-full text-green-600 bg-green-50 hover:bg-green-100 border border-green-200 hover:border-green-300 transition-colors"
+                                    title="Quick Approve"
+                                  >
+                                    <CheckCircleIcon className="w-4 h-4" />
+                                  </button>
+
+                                  {/* Quick Reject Button */}
+                                  <button
+                                    onClick={() => rejectDoctor(doctor._id)}
+                                    className="inline-flex items-center justify-center w-8 h-8 rounded-full text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 hover:border-red-300 transition-colors"
+                                    title="Quick Reject"
+                                  >
+                                    <XCircleIcon className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Cards */}
+                    <div className="lg:hidden space-y-4">
+                      {pendingDoctors.map((doctor) => (
+                        <div key={doctor._id} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
+                          <div className="flex items-start space-x-3 mb-4">
+                            <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg flex-shrink-0">
+                              <BeakerIcon className="w-7 h-7" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="text-sm font-semibold text-gray-900 truncate">
+                                    Dr. {doctor.firstName} {doctor.lastName}
+                                  </h4>
+                                  <p className="text-xs text-gray-500 truncate">{doctor.email}</p>
+                                  <p className="text-xs text-gray-500">{doctor.phone}</p>
+                                </div>
+                                <span className="inline-flex px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 ml-2 flex-shrink-0">
+                                  {doctor.verificationStatus === 'pending' ? 'Pending' : doctor.verificationStatus}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                            <div>
+                              <h5 className="text-xs font-medium text-gray-700 mb-1">Specialization</h5>
+                              <p className="text-sm text-gray-900">{doctor.specialization}</p>
+                              {doctor.consultationFee && (
+                                <p className="text-xs text-green-600 font-medium mt-1">
+                                  Fee: ${doctor.consultationFee}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <h5 className="text-xs font-medium text-gray-700 mb-1">Registration</h5>
+                              <p className="text-sm text-gray-600">
+                                {new Date(doctor.createdAt).toLocaleDateString('en-US', {
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: 'numeric'
+                                })}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mb-4">
+                            <h5 className="text-xs font-medium text-gray-700 mb-2">License & Experience</h5>
+                            <div className="space-y-1">
+                              <div className="text-xs">
+                                <span className="font-medium text-gray-700">License:</span>
+                                <span className="ml-1 font-mono text-blue-600 text-xs">
+                                  {doctor.medicalLicenseNumber}
+                                </span>
+                              </div>
+                              <div className="text-xs">
+                                <span className="font-medium text-gray-700">Experience:</span>
+                                <span className="ml-1 text-gray-600">{doctor.experience}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Mobile Action Buttons */}
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => {
+                                setSelectedDoctor(doctor);
+                                setShowDoctorVerificationModal(true);
+                              }}
+                              className="flex-1 min-w-0 inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+                            >
+                              <EyeIcon className="w-4 h-4 mr-1" />
+                              View Details
+                            </button>
+                            <button
+                              onClick={() => approveDoctor(doctor._id)}
+                              className="inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-green-600 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors"
+                            >
+                              <CheckCircleIcon className="w-4 h-4 mr-1" />
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => rejectDoctor(doctor._id)}
+                              className="inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                            >
+                              <XCircleIcon className="w-4 h-4 mr-1" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </Card>
+
+            {/* Quick Actions Card */}
+            <Card className="bg-gradient-to-r from-blue-50 to-purple-50 border-0 shadow-lg">
+              <div className="p-4 sm:p-6">
+                <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-3 sm:mb-4 flex items-center">
+                  <BoltIcon className="mr-2 w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
+                  Quick Actions
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                  <div className="bg-white rounded-lg p-3 sm:p-4 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs sm:text-sm text-gray-600">Pending Verifications</p>
+                        <p className="text-xl sm:text-2xl font-bold text-yellow-600">{pendingDoctors.length}</p>
+                      </div>
+                      <div className="text-yellow-500 text-xl sm:text-2xl">
+                        <ClockIcon className="w-6 h-6 sm:w-8 sm:h-8" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 sm:p-4 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs sm:text-sm text-gray-600">Total Doctors</p>
+                        <p className="text-xl sm:text-2xl font-bold text-blue-600">{userStats.totalDoctors}</p>
+                      </div>
+                      <div className="text-blue-500 text-xl sm:text-2xl">
+                        <BeakerIcon className="w-6 h-6 sm:w-8 sm:h-8" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 sm:p-4 shadow-sm sm:col-span-2 lg:col-span-1">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs sm:text-sm text-gray-600">Verified Doctors</p>
+                        <p className="text-xl sm:text-2xl font-bold text-green-600">
+                          {userStats.totalDoctors - pendingDoctors.length}
+                        </p>
+                      </div>
+                      <div className="text-green-500 text-xl sm:text-2xl">
+                        <CheckCircleIcon className="w-6 h-6 sm:w-8 sm:h-8" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </Card>
           </div>
         );
@@ -1496,12 +1833,14 @@ const AdminDashboard = () => {
       {/* Modals */}
       <Modal
         isOpen={showUserModal}
-        onClose={() => setShowUserModal(false)}
+        onClose={() => {
+          setShowUserModal(false);
+        }}
         title="User Details"
         size="xl"
       >
         {selectedUser && (
-          <div className="space-y-8">
+          <div className="space-y-6">
             {/* Header Section */}
             <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-lg">
               <div className="flex items-center space-x-6">
@@ -1546,169 +1885,7 @@ const AdminDashboard = () => {
 
             {/* Detailed Information Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* Personal Information */}
-              <div className="space-y-6">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">Personal Information</h4>
-                <div className="space-y-4">
-                  <div className="bg-blue-50 p-4 rounded-lg">
-                    <div className="text-sm text-blue-600 font-medium flex items-center">
-                      <UserIcon className="w-4 h-4 mr-2" />
-                      Full Name
-                    </div>
-                    <div className="text-lg font-semibold text-blue-800">{`${selectedUser.firstName} ${selectedUser.lastName}`}</div>
-                  </div>
-                  <div className="bg-green-50 p-4 rounded-lg">
-                    <div className="text-sm text-green-600 font-medium flex items-center">
-                      <EnvelopeIcon className="w-4 h-4 mr-2" />
-                      Email Address
-                    </div>
-                    <div className="font-medium text-green-800">{selectedUser.email}</div>
-                  </div>
-                  {selectedUser.phone && (
-                    <div className="bg-purple-50 p-4 rounded-lg">
-                      <div className="text-sm text-purple-600 font-medium flex items-center">
-                        <PhoneIcon className="w-4 h-4 mr-2" />
-                        Phone Number
-                      </div>
-                      <div className="font-medium text-purple-800">{selectedUser.phone}</div>
-                    </div>
-                  )}
-                  <div className="bg-orange-50 p-4 rounded-lg">
-                    <div className="text-sm text-orange-600 font-medium flex items-center">
-                      <CalendarIcon className="w-4 h-4 mr-2" />
-                      Registration Date
-                    </div>
-                    <div className="font-medium text-orange-800">{new Date(selectedUser.createdAt).toLocaleDateString('en-US', { 
-                      year: 'numeric', 
-                      month: 'long', 
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Account Information */}
-              <div className="space-y-6">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">Account Details</h4>
-                <div className="space-y-4">
-                  <div className="bg-indigo-50 p-4 rounded-lg">
-                    <div className="text-sm text-indigo-600 font-medium flex items-center">
-                      <IdentificationIcon className="w-4 h-4 mr-2" />
-                      User Type
-                    </div>
-                    <div className="text-lg font-bold text-indigo-800 capitalize">{selectedUser.userType}</div>
-                  </div>
-                  {selectedUser.verificationStatus && (
-                    <div className="bg-teal-50 p-4 rounded-lg">
-                      <div className="text-sm text-teal-600 font-medium flex items-center">
-                        <ShieldCheckIcon className="w-4 h-4 mr-2" />
-                        Verification Status
-                      </div>
-                      <div className="font-medium text-teal-800 capitalize">{selectedUser.verificationStatus}</div>
-                    </div>
-                  )}
-                  <div className="bg-cyan-50 p-4 rounded-lg">
-                    <div className="text-sm text-cyan-600 font-medium flex items-center">
-                      <CheckCircleIcon className="w-4 h-4 mr-2" />
-                      Account Status
-                    </div>
-                    <div className="font-medium text-cyan-800">{selectedUser.isActive !== false ? 'Active' : 'Inactive'}</div>
-                  </div>
-                  <div className="bg-pink-50 p-4 rounded-lg">
-                    <div className="text-sm text-pink-600 font-medium">Email Verified</div>
-                    <div className="font-medium text-pink-800">{selectedUser.isEmailVerified ? 'Yes' : 'No'}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Professional Information (for doctors) */}
-            {selectedUser.userType === 'doctor' && (
-              <div className="space-y-4">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">Professional Information</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {selectedUser.specialization && (
-                    <div className="bg-emerald-50 p-4 rounded-lg">
-                      <div className="text-sm text-emerald-600 font-medium flex items-center">
-                        <BeakerIcon className="w-4 h-4 mr-2" />
-                        Specialization
-                      </div>
-                      <div className="font-medium text-emerald-800">{selectedUser.specialization}</div>
-                    </div>
-                  )}
-                  {selectedUser.medicalLicenseNumber && (
-                    <div className="bg-amber-50 p-4 rounded-lg">
-                      <div className="text-sm text-amber-600 font-medium flex items-center">
-                        <DocumentCheckIcon className="w-4 h-4 mr-2" />
-                        Medical License
-                      </div>
-                      <div className="font-medium text-amber-800 font-mono">{selectedUser.medicalLicenseNumber}</div>
-                    </div>
-                  )}
-                  {selectedUser.experience && (
-                    <div className="bg-rose-50 p-4 rounded-lg">
-                      <div className="text-sm text-rose-600 font-medium flex items-center">
-                        <AcademicCapIcon className="w-4 h-4 mr-2" />
-                        Experience
-                      </div>
-                      <div className="font-medium text-rose-800">{selectedUser.experience}</div>
-                    </div>
-                  )}
-                  {selectedUser.consultationFee && (
-                    <div className="bg-violet-50 p-4 rounded-lg">
-                      <div className="text-sm text-violet-600 font-medium flex items-center">
-                        <BanknotesIcon className="w-4 h-4 mr-2" />
-                        Consultation Fee
-                      </div>
-                      <div className="font-medium text-violet-800">${selectedUser.consultationFee}</div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div className="bg-gray-50 p-6 rounded-lg">
-              <h4 className="text-lg font-bold text-gray-900 mb-4">Account Actions</h4>
-              <div className="flex flex-col sm:flex-row gap-4">
-                <Button 
-                  onClick={() => blockUser(selectedUser._id)}
-                  className={`flex-1 py-3 px-6 text-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200 ${
-                    selectedUser.isActive !== false 
-                      ? 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white'
-                      : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white'
-                  }`}
-                >
-                  <span className="flex items-center justify-center space-x-2">
-                    {selectedUser.isActive !== false ? (
-                      <NoSymbolIcon className="w-6 h-6" />
-                    ) : (
-                      <CheckCircleIcon className="w-6 h-6" />
-                    )}
-                    <span>{selectedUser.isActive !== false ? 'Block User' : 'Activate User'}</span>
-                  </span>
-                </Button>
-                {selectedUser.userType === 'doctor' && selectedUser.verificationStatus === 'pending' && (
-                  <Button 
-                    onClick={() => viewDoctorVerification(selectedUser)}
-                    className="flex-1 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white py-3 px-6 text-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200"
-                  >
-                    <span className="flex items-center justify-center space-x-2">
-                      <EyeIcon className="w-6 h-6" />
-                      <span>Review Verification</span>
-                    </span>
-                  </Button>
-                )}
-                <Button 
-                  variant="outline" 
-                  onClick={() => setShowUserModal(false)}
-                  className="py-3 px-6 text-lg border-2 border-gray-300 hover:border-gray-400"
-                >
-                  Close
-                </Button>
-              </div>
+              {/* ...existing code for personal and account information... */}
             </div>
           </div>
         )}
@@ -1721,19 +1898,19 @@ const AdminDashboard = () => {
         size="xl"
       >
         {selectedDoctor && (
-          <div className="space-y-8">
+          <div className="space-y-4 sm:space-y-8">
             {/* Header Section */}
-            <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-lg">
-              <div className="flex items-center space-x-6">
-                <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white text-4xl shadow-lg">
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-3 sm:p-6 rounded-lg">
+              <div className="flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-6">
+                <div className="w-16 h-16 sm:w-24 sm:h-24 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white text-2xl sm:text-4xl shadow-lg flex-shrink-0">
                   👨‍⚕️
                 </div>
-                <div className="flex-1">
-                  <h3 className="text-3xl font-bold text-gray-900">{`Dr. ${selectedDoctor.firstName} ${selectedDoctor.lastName}`}</h3>
-                  <p className="text-xl text-blue-600 font-medium">{selectedDoctor.specialization}</p>
-                  <p className="text-gray-600 mt-1">{selectedDoctor.email}</p>
+                <div className="flex-1 text-center sm:text-left">
+                  <h3 className="text-xl sm:text-3xl font-bold text-gray-900">{`Dr. ${selectedDoctor.firstName} ${selectedDoctor.lastName}`}</h3>
+                  <p className="text-lg sm:text-xl text-blue-600 font-medium">{selectedDoctor.specialization}</p>
+                  <p className="text-sm sm:text-base text-gray-600 mt-1">{selectedDoctor.email}</p>
                   <div className="mt-3">
-                    <span className={`inline-flex px-4 py-2 rounded-full text-sm font-medium ${
+                    <span className={`inline-flex px-3 sm:px-4 py-1 sm:py-2 rounded-full text-xs sm:text-sm font-medium ${
                       selectedDoctor.verificationStatus === 'pending' 
                         ? 'bg-yellow-100 text-yellow-800' 
                         : selectedDoctor.verificationStatus === 'verified'
@@ -1748,26 +1925,26 @@ const AdminDashboard = () => {
             </div>
 
             {/* Detailed Information Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8">
               {/* Personal Information */}
-              <div className="space-y-6">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">Personal Information</h4>
-                <div className="space-y-4">
-                  <div className="bg-blue-50 p-4 rounded-lg">
-                    <div className="text-sm text-blue-600 font-medium">Full Name</div>
-                    <div className="text-lg font-semibold text-blue-800">{`${selectedDoctor.firstName} ${selectedDoctor.lastName}`}</div>
+              <div className="space-y-4 sm:space-y-6">
+                <h4 className="text-base sm:text-lg font-bold text-gray-900 border-b pb-2">Personal Information</h4>
+                <div className="space-y-3 sm:space-y-4">
+                  <div className="bg-blue-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-blue-600 font-medium">Full Name</div>
+                    <div className="text-sm sm:text-lg font-semibold text-blue-800">{`${selectedDoctor.firstName} ${selectedDoctor.lastName}`}</div>
                   </div>
-                  <div className="bg-green-50 p-4 rounded-lg">
-                    <div className="text-sm text-green-600 font-medium">Email Address</div>
-                    <div className="font-medium text-green-800">{selectedDoctor.email}</div>
+                  <div className="bg-green-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-green-600 font-medium">Email Address</div>
+                    <div className="text-sm sm:text-base font-medium text-green-800 break-all">{selectedDoctor.email}</div>
                   </div>
-                  <div className="bg-purple-50 p-4 rounded-lg">
-                    <div className="text-sm text-purple-600 font-medium">Phone Number</div>
-                    <div className="font-medium text-purple-800">{selectedDoctor.phone}</div>
+                  <div className="bg-purple-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-purple-600 font-medium">Phone Number</div>
+                    <div className="text-sm sm:text-base font-medium text-purple-800">{selectedDoctor.phone}</div>
                   </div>
-                  <div className="bg-orange-50 p-4 rounded-lg">
-                    <div className="text-sm text-orange-600 font-medium">Registration Date</div>
-                    <div className="font-medium text-orange-800">{new Date(selectedDoctor.createdAt).toLocaleDateString('en-US', { 
+                  <div className="bg-orange-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-orange-600 font-medium">Registration Date</div>
+                    <div className="text-sm sm:text-base font-medium text-orange-800">{new Date(selectedDoctor.createdAt).toLocaleDateString('en-US', { 
                       year: 'numeric', 
                       month: 'long', 
                       day: 'numeric',
@@ -1779,29 +1956,29 @@ const AdminDashboard = () => {
               </div>
 
               {/* Professional Information */}
-              <div className="space-y-6">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">Professional Details</h4>
-                <div className="space-y-4">
-                  <div className="bg-indigo-50 p-4 rounded-lg">
-                    <div className="text-sm text-indigo-600 font-medium">Medical License Number</div>
-                    <div className="text-lg font-bold text-indigo-800 font-mono">{selectedDoctor.medicalLicenseNumber}</div>
+              <div className="space-y-4 sm:space-y-6">
+                <h4 className="text-base sm:text-lg font-bold text-gray-900 border-b pb-2">Professional Details</h4>
+                <div className="space-y-3 sm:space-y-4">
+                  <div className="bg-indigo-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-indigo-600 font-medium">Medical License Number</div>
+                    <div className="text-sm sm:text-lg font-bold text-indigo-800 font-mono break-all">{selectedDoctor.medicalLicenseNumber}</div>
                   </div>
-                  <div className="bg-teal-50 p-4 rounded-lg">
-                    <div className="text-sm text-teal-600 font-medium">Specialization</div>
-                    <div className="font-medium text-teal-800">{selectedDoctor.specialization}</div>
+                  <div className="bg-teal-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-teal-600 font-medium">Specialization</div>
+                    <div className="text-sm sm:text-base font-medium text-teal-800">{selectedDoctor.specialization}</div>
                   </div>
-                  <div className="bg-cyan-50 p-4 rounded-lg">
-                    <div className="text-sm text-cyan-600 font-medium">Years of Experience</div>
-                    <div className="font-medium text-cyan-800">{selectedDoctor.experience}</div>
+                  <div className="bg-cyan-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-cyan-600 font-medium">Years of Experience</div>
+                    <div className="text-sm sm:text-base font-medium text-cyan-800">{selectedDoctor.experience}</div>
                   </div>
-                  <div className="bg-pink-50 p-4 rounded-lg">
-                    <div className="text-sm text-pink-600 font-medium">User Type</div>
-                    <div className="font-medium text-pink-800 capitalize">{selectedDoctor.userType}</div>
+                  <div className="bg-pink-50 p-3 sm:p-4 rounded-lg">
+                    <div className="text-xs sm:text-sm text-pink-600 font-medium">User Type</div>
+                    <div className="text-sm sm:text-base font-medium text-pink-800 capitalize">{selectedDoctor.userType}</div>
                   </div>
                   {selectedDoctor.consultationFee && (
-                    <div className="bg-emerald-50 p-4 rounded-lg">
-                      <div className="text-sm text-emerald-600 font-medium">Consultation Fee</div>
-                      <div className="font-medium text-emerald-800">${selectedDoctor.consultationFee}</div>
+                    <div className="bg-emerald-50 p-3 sm:p-4 rounded-lg">
+                      <div className="text-xs sm:text-sm text-emerald-600 font-medium">Consultation Fee</div>
+                      <div className="text-sm sm:text-base font-medium text-emerald-800">${selectedDoctor.consultationFee}</div>
                     </div>
                   )}
                 </div>
@@ -1810,20 +1987,20 @@ const AdminDashboard = () => {
 
             {/* Additional Information */}
             {(selectedDoctor.otherSpecialization || selectedDoctor.verificationDocument) && (
-              <div className="space-y-4">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">Additional Information</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-3 sm:space-y-4">
+                <h4 className="text-base sm:text-lg font-bold text-gray-900 border-b pb-2">Additional Information</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
                   {selectedDoctor.otherSpecialization && (
-                    <div className="bg-amber-50 p-4 rounded-lg">
-                      <div className="text-sm text-amber-600 font-medium">Other Specialization</div>
-                      <div className="font-medium text-amber-800">{selectedDoctor.otherSpecialization}</div>
+                    <div className="bg-amber-50 p-3 sm:p-4 rounded-lg">
+                      <div className="text-xs sm:text-sm text-amber-600 font-medium">Other Specialization</div>
+                      <div className="text-sm sm:text-base font-medium text-amber-800">{selectedDoctor.otherSpecialization}</div>
                     </div>
                   )}
                   {selectedDoctor.verificationDocument && (
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <div className="text-sm text-gray-600 font-medium">Verification Documents</div>
-                      <div className="font-medium text-gray-800">Uploaded</div>
-                      <button className="mt-2 text-blue-600 hover:text-blue-800 text-sm underline">
+                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
+                      <div className="text-xs sm:text-sm text-gray-600 font-medium">Verification Documents</div>
+                      <div className="text-sm sm:text-base font-medium text-gray-800">Uploaded</div>
+                      <button className="mt-2 text-blue-600 hover:text-blue-800 text-xs sm:text-sm underline">
                         View Documents
                       </button>
                     </div>
@@ -1833,12 +2010,12 @@ const AdminDashboard = () => {
             )}
 
             {/* Verification Actions */}
-            <div className="bg-gray-50 p-6 rounded-lg">
-              <h4 className="text-lg font-bold text-gray-900 mb-4">Verification Actions</h4>
-              <div className="flex flex-col sm:flex-row gap-4">
+            <div className="bg-gray-50 p-3 sm:p-6 rounded-lg">
+              <h4 className="text-base sm:text-lg font-bold text-gray-900 mb-3 sm:mb-4">Verification Actions</h4>
+              <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
                 <Button 
                   onClick={() => approveDoctor(selectedDoctor._id)}
-                  className="flex-1 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white py-3 px-6 text-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200"
+                  className="flex-1 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white py-2 sm:py-3 px-4 sm:px-6 text-sm sm:text-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200"
                   disabled={selectedDoctor.verificationStatus === 'verified'}
                 >
                   <span className="flex items-center justify-center space-x-2">
@@ -1848,7 +2025,7 @@ const AdminDashboard = () => {
                 </Button>
                 <Button 
                   onClick={() => rejectDoctor(selectedDoctor._id)}
-                  className="flex-1 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-3 px-6 text-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200"
+                  className="flex-1 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-2 sm:py-3 px-4 sm:px-6 text-sm sm:text-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200"
                   disabled={selectedDoctor.verificationStatus === 'rejected'}
                 >
                   <span className="flex items-center justify-center space-x-2">
@@ -1859,14 +2036,14 @@ const AdminDashboard = () => {
                 <Button 
                   variant="outline" 
                   onClick={() => setShowDoctorVerificationModal(false)}
-                  className="py-3 px-6 text-lg border-2 border-gray-300 hover:border-gray-400"
+                  className="py-2 sm:py-3 px-4 sm:px-6 text-sm sm:text-lg border-2 border-gray-300 hover:border-gray-400"
                 >
                   Close
                 </Button>
               </div>
               {selectedDoctor.verificationStatus !== 'pending' && (
-                <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-                  <p className="text-blue-700 text-sm">
+                <div className="mt-3 sm:mt-4 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-blue-700 text-xs sm:text-sm">
                     This doctor has already been {selectedDoctor.verificationStatus}. 
                     Actions are disabled to maintain data integrity.
                   </p>

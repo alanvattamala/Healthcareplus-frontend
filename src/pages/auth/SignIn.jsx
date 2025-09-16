@@ -29,13 +29,7 @@ const SignIn = () => {
     
     // Navigate to appropriate dashboard after a short delay
     setTimeout(() => {
-      // Check if user is a doctor and needs verification
-      if (userData.userType === 'doctor' && userData.verificationStatus !== 'verified') {
-        toast.info('Your account is pending verification. Redirecting...');
-        navigate('/verification-pending');
-      } else {
-        navigate(getDashboardRoute());
-      }
+      navigate(getDashboardRoute());
     }, 1500);
   };
 
@@ -82,13 +76,7 @@ const SignIn = () => {
         
         // Navigate to appropriate dashboard after a short delay
         setTimeout(() => {
-          // Check if user is a doctor and needs verification
-          if (userData.userType === 'doctor' && userData.verificationStatus !== 'verified') {
-            toast.info('Your account is pending verification. Redirecting...');
-            navigate('/verification-pending');
-          } else {
-            navigate(getDashboardRoute());
-          }
+          navigate(getDashboardRoute());
         }, 1500);
       } else {
         // Login failed
@@ -133,13 +121,7 @@ const SignIn = () => {
       authenticateUser(demoUser, `demo-${role}-token-123`);
       
       setTimeout(() => {
-        // Check if demo doctor needs verification
-        if (role === 'doctor' && verificationStatus !== 'verified') {
-          toast.info('Your account is pending verification. Redirecting...');
-          navigate('/verification-pending');
-        } else {
-          navigate(getDashboardRoute());
-        }
+        navigate(getDashboardRoute());
       }, 1500);
     } finally {
       setIsLoading(false);
