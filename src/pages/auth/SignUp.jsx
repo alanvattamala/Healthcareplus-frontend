@@ -32,6 +32,12 @@ const SignUp = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [touched, setTouched] = useState({});
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [emailAvailability, setEmailAvailability] = useState({
+    checking: false,
+    available: null,
+    message: ''
+  });
   
   // Email verification states
   const [isEmailVerificationStep, setIsEmailVerificationStep] = useState(false);
@@ -271,6 +277,60 @@ const SignUp = () => {
     return emailRegex.test(email);
   };
 
+  // Check email availability in database
+  const checkEmailAvailability = async (email) => {
+    if (!validateEmail(email)) {
+      setEmailAvailability({ checking: false, available: null, message: '' });
+      return;
+    }
+
+    setEmailAvailability({ checking: true, available: null, message: 'Checking availability...' });
+    
+    try {
+      const response = await fetch('http://localhost:3001/api/auth/check-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        if (data.available) {
+          setEmailAvailability({ 
+            checking: false, 
+            available: true, 
+            message: 'Email is available!' 
+          });
+          setFieldErrors(prev => ({ ...prev, email: '' }));
+        } else {
+          setEmailAvailability({ 
+            checking: false, 
+            available: false, 
+            message: 'Email is already registered' 
+          });
+          setFieldErrors(prev => ({ ...prev, email: 'This email is already in use' }));
+        }
+      } else {
+        setEmailAvailability({ checking: false, available: null, message: '' });
+      }
+    } catch (error) {
+      console.error('Email check error:', error);
+      setEmailAvailability({ checking: false, available: null, message: '' });
+    }
+  };
+
+  // Debounced email checking
+  let emailCheckTimeout;
+  const debouncedEmailCheck = (email) => {
+    clearTimeout(emailCheckTimeout);
+    emailCheckTimeout = setTimeout(() => {
+      checkEmailAvailability(email);
+    }, 500);
+  };
+
   const validatePassword = (password) => {
     // At least 8 characters, 1 uppercase, 1 lowercase, 1 number
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d@$!%*?&]{8,}$/;
@@ -339,12 +399,119 @@ const SignUp = () => {
     }
   };
 
+  // Comprehensive field validation with error messages
+  const validateField = (fieldName, value) => {
+    let error = '';
+    
+    switch (fieldName) {
+      case 'firstName':
+        if (!value.trim()) {
+          error = 'First name is required';
+        } else if (!validateName(value)) {
+          error = 'First name must be at least 2 characters and contain only letters';
+        }
+        break;
+      case 'lastName':
+        if (!value.trim()) {
+          error = 'Last name is required';
+        } else if (!validateName(value)) {
+          error = 'Last name must be at least 2 characters and contain only letters';
+        }
+        break;
+      case 'email':
+        if (!value.trim()) {
+          error = 'Email is required';
+        } else if (!validateEmail(value)) {
+          error = 'Please enter a valid email address';
+        }
+        break;
+      case 'password':
+        if (!value.trim()) {
+          error = 'Password is required';
+        } else if (!validatePassword(value)) {
+          error = 'Password must be at least 8 characters with uppercase, lowercase, and number';
+        }
+        break;
+      case 'confirmPassword':
+        if (!value.trim()) {
+          error = 'Please confirm your password';
+        } else if (value !== formData.password) {
+          error = 'Passwords do not match';
+        }
+        break;
+      case 'phone':
+        if (!value.trim()) {
+          error = 'Phone number is required';
+        } else if (!validatePhone(value)) {
+          error = 'Please enter a valid phone number';
+        }
+        break;
+      case 'dateOfBirth':
+        if (formData.userType === 'patient' && !value.trim()) {
+          error = 'Date of birth is required';
+        } else if (value && !validateDateOfBirth(value)) {
+          error = 'Please enter a valid date of birth';
+        }
+        break;
+      case 'gender':
+        if (formData.userType === 'patient' && !value.trim()) {
+          error = 'Gender is required';
+        }
+        break;
+      case 'bloodGroup':
+        if (formData.userType === 'patient' && !value.trim()) {
+          error = 'Blood group is required';
+        }
+        break;
+      case 'medicalLicenseNumber':
+        if (formData.userType === 'doctor' && !value.trim()) {
+          error = 'Medical license number is required';
+        } else if (formData.userType === 'doctor' && !validateMedicalLicense(value)) {
+          error = 'Please enter a valid medical license number';
+        }
+        break;
+      case 'specialization':
+        if (formData.userType === 'doctor' && (!value || value === 'select')) {
+          error = 'Please select your specialization';
+        }
+        break;
+      case 'otherSpecialization':
+        if (formData.userType === 'doctor' && formData.specialization === 'other' && !value.trim()) {
+          error = 'Please specify your specialization';
+        }
+        break;
+      case 'experience':
+        if (formData.userType === 'doctor' && !value.trim()) {
+          error = 'Years of experience is required';
+        }
+        break;
+    }
+    
+    return { isValid: error === '', error };
+  };
+
   const handleChange = (e) => {
     const { name, value, type, checked, files } = e.target;
+    const newValue = type === 'checkbox' ? checked : type === 'file' ? files[0] : value;
+    
     setFormData({
       ...formData,
-      [name]: type === 'checkbox' ? checked : type === 'file' ? files[0] : value
+      [name]: newValue
     });
+
+    // Real-time validation for touched fields
+    if (touched[name]) {
+      const validation = validateField(name, newValue);
+      setFieldErrors(prev => ({
+        ...prev,
+        [name]: validation.error
+      }));
+    }
+
+    // Check email availability when email changes
+    if (name === 'email' && newValue) {
+      debouncedEmailCheck(newValue);
+    }
   };
 
   const handleBlur = (fieldName) => {
@@ -352,18 +519,66 @@ const SignUp = () => {
       ...touched,
       [fieldName]: true
     });
+
+    // Validate field on blur
+    const validation = validateField(fieldName, formData[fieldName]);
+    setFieldErrors(prev => ({
+      ...prev,
+      [fieldName]: validation.error
+    }));
   };
 
-  // Validation Icon Component
+  // Enhanced Validation Icon Component
   const ValidationIcon = ({ fieldName, value }) => {
+    const hasError = fieldErrors[fieldName];
     const shouldShow = touched[fieldName] && value;
-    const isValid = isFieldValid(fieldName, value);
     
-    if (!shouldShow) return null;
+    if (!shouldShow && !hasError) return null;
     
+    // Special handling for email field
+    if (fieldName === 'email') {
+      if (emailAvailability.checking) {
+        return (
+          <div className="absolute right-4 top-1/2 transform -translate-y-1/2 z-10">
+            <div className="w-5 h-5 animate-spin">
+              <svg className="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+          </div>
+        );
+      }
+      
+      if (emailAvailability.available === false || hasError) {
+        return (
+          <div className="absolute right-4 top-1/2 transform -translate-y-1/2 z-10">
+            <div className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center animate-scale-in">
+              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+          </div>
+        );
+      }
+      
+      if (emailAvailability.available === true && !hasError) {
+        return (
+          <div className="absolute right-4 top-1/2 transform -translate-y-1/2 z-10">
+            <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center animate-scale-in">
+              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          </div>
+        );
+      }
+    }
+    
+    // For other fields
     return (
       <div className="absolute right-4 top-1/2 transform -translate-y-1/2 z-10">
-        {isValid ? (
+        {(!hasError && isFieldValid(fieldName, value)) ? (
           <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center animate-scale-in">
             <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
@@ -687,10 +902,10 @@ const SignUp = () => {
                         onChange={handleChange}
                         onBlur={() => handleBlur('firstName')}
                         className={`w-full px-4 py-4 pr-12 border-2 rounded-2xl focus:ring-4 transition-all duration-300 bg-white/70 backdrop-blur-sm text-gray-900 placeholder-gray-500 ${
-                          touched.firstName && formData.firstName
-                            ? isFieldValid('firstName', formData.firstName)
-                              ? 'border-green-300 focus:border-green-500 focus:ring-green-100 group-hover/input:border-green-400'
-                              : 'border-red-300 focus:border-red-500 focus:ring-red-100 group-hover/input:border-red-400'
+                          (fieldErrors.firstName || (touched.firstName && !formData.firstName))
+                            ? 'border-red-300 focus:border-red-500 focus:ring-red-100 group-hover/input:border-red-400'
+                            : touched.firstName && formData.firstName && isFieldValid('firstName', formData.firstName)
+                            ? 'border-green-300 focus:border-green-500 focus:ring-green-100 group-hover/input:border-green-400'
                             : 'border-gray-200 focus:border-blue-500 focus:ring-blue-100 group-hover/input:border-blue-300'
                         } group-hover/input:bg-white/90`}
                         placeholder="John"
@@ -698,12 +913,12 @@ const SignUp = () => {
                       <ValidationIcon fieldName="firstName" value={formData.firstName} />
                       <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-blue-500 to-purple-600 opacity-0 group-focus-within/input:opacity-10 transition-opacity duration-300 pointer-events-none"></div>
                     </div>
-                    {touched.firstName && formData.firstName && !isFieldValid('firstName', formData.firstName) && (
-                      <p className="text-red-500 text-xs mt-1 flex items-center">
+                    {(fieldErrors.firstName || (touched.firstName && !formData.firstName)) && (
+                      <p className="text-red-500 text-xs mt-1 flex items-center animate-fade-in">
                         <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
-                        First name must be at least 2 characters and contain only letters
+                        {fieldErrors.firstName || 'First name is required'}
                       </p>
                     )}
                   </div>
@@ -725,10 +940,10 @@ const SignUp = () => {
                         onChange={handleChange}
                         onBlur={() => handleBlur('lastName')}
                         className={`w-full px-4 py-4 pr-12 border-2 rounded-2xl focus:ring-4 transition-all duration-300 bg-white/70 backdrop-blur-sm text-gray-900 placeholder-gray-500 ${
-                          touched.lastName && formData.lastName
-                            ? isFieldValid('lastName', formData.lastName)
-                              ? 'border-green-300 focus:border-green-500 focus:ring-green-100 group-hover/input:border-green-400'
-                              : 'border-red-300 focus:border-red-500 focus:ring-red-100 group-hover/input:border-red-400'
+                          (fieldErrors.lastName || (touched.lastName && !formData.lastName))
+                            ? 'border-red-300 focus:border-red-500 focus:ring-red-100 group-hover/input:border-red-400'
+                            : touched.lastName && formData.lastName && isFieldValid('lastName', formData.lastName)
+                            ? 'border-green-300 focus:border-green-500 focus:ring-green-100 group-hover/input:border-green-400'
                             : 'border-gray-200 focus:border-purple-500 focus:ring-purple-100 group-hover/input:border-purple-300'
                         } group-hover/input:bg-white/90`}
                         placeholder="Doe"
@@ -736,12 +951,12 @@ const SignUp = () => {
                       <ValidationIcon fieldName="lastName" value={formData.lastName} />
                       <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-purple-500 to-pink-600 opacity-0 group-focus-within/input:opacity-10 transition-opacity duration-300 pointer-events-none"></div>
                     </div>
-                    {touched.lastName && formData.lastName && !isFieldValid('lastName', formData.lastName) && (
-                      <p className="text-red-500 text-xs mt-1 flex items-center">
+                    {(fieldErrors.lastName || (touched.lastName && !formData.lastName)) && (
+                      <p className="text-red-500 text-xs mt-1 flex items-center animate-fade-in">
                         <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
-                        Last name must be at least 2 characters and contain only letters
+                        {fieldErrors.lastName || 'Last name is required'}
                       </p>
                     )}
                   </div>
@@ -766,10 +981,10 @@ const SignUp = () => {
                         onChange={handleChange}
                         onBlur={() => handleBlur('email')}
                         className={`w-full px-4 py-4 pr-12 border-2 rounded-2xl focus:ring-4 transition-all duration-300 bg-white/70 backdrop-blur-sm text-gray-900 placeholder-gray-500 ${
-                          touched.email && formData.email
-                            ? isFieldValid('email', formData.email)
-                              ? 'border-green-300 focus:border-green-500 focus:ring-green-100 group-hover/input:border-green-400'
-                              : 'border-red-300 focus:border-red-500 focus:ring-red-100 group-hover/input:border-red-400'
+                          (fieldErrors.email || emailAvailability.available === false || (touched.email && !formData.email))
+                            ? 'border-red-300 focus:border-red-500 focus:ring-red-100 group-hover/input:border-red-400'
+                            : emailAvailability.available === true && touched.email && formData.email && isFieldValid('email', formData.email)
+                            ? 'border-green-300 focus:border-green-500 focus:ring-green-100 group-hover/input:border-green-400'
                             : 'border-gray-200 focus:border-pink-500 focus:ring-pink-100 group-hover/input:border-pink-300'
                         } group-hover/input:bg-white/90`}
                         placeholder="john@example.com"
@@ -777,13 +992,42 @@ const SignUp = () => {
                       <ValidationIcon fieldName="email" value={formData.email} />
                       <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-pink-500 to-blue-600 opacity-0 group-focus-within/input:opacity-10 transition-opacity duration-300 pointer-events-none"></div>
                     </div>
-                    {touched.email && formData.email && !isFieldValid('email', formData.email) && (
-                      <p className="text-red-500 text-xs mt-1 flex items-center">
-                        <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
-                        Please enter a valid email address
-                      </p>
+                    {/* Email error display with availability checking */}
+                    {(fieldErrors.email || emailAvailability.message || (touched.email && !formData.email)) && (
+                      <div className="space-y-1">
+                        {fieldErrors.email && (
+                          <p className="text-red-500 text-xs flex items-center animate-fade-in">
+                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            {fieldErrors.email}
+                          </p>
+                        )}
+                        {emailAvailability.available === false && (
+                          <p className="text-red-500 text-xs flex items-center animate-fade-in">
+                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                            {emailAvailability.message}
+                          </p>
+                        )}
+                        {emailAvailability.available === true && (
+                          <p className="text-green-600 text-xs flex items-center animate-fade-in">
+                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            {emailAvailability.message}
+                          </p>
+                        )}
+                        {touched.email && !formData.email && !fieldErrors.email && (
+                          <p className="text-red-500 text-xs flex items-center animate-fade-in">
+                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            Email is required
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -1267,23 +1511,23 @@ const SignUp = () => {
                 </button>
 
                 {/* Divider */}
-                <div className="relative my-8">
+                {/* <div className="relative my-8">
                   <div className="absolute inset-0 flex items-center">
                     <div className="w-full border-t border-gray-200"></div>
                   </div>
                   <div className="relative flex justify-center text-sm">
                     <span className="px-4 bg-white text-gray-500 font-medium">Or sign up with</span>
                   </div>
-                </div>
+                </div> */}
 
                 {/* Social Sign Up Options */}
-                <div className="flex justify-center">
+                {/* <div className="flex justify-center">
                   <GoogleSignIn
                     onSuccess={handleGoogleSuccess}
                     onError={handleGoogleError}
                     disabled={isLoading}
                   />
-                </div>
+                </div> */}
 
                 {/* Sign In Link */}
                 <div className="text-center pt-4">

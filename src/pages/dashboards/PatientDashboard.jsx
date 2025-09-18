@@ -50,6 +50,7 @@ const PatientDashboard = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [availableDoctors, setAvailableDoctors] = useState([]);
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
 
@@ -128,12 +129,80 @@ const PatientDashboard = () => {
         }
         
         setUser(patientData);
+        
+        // Load available doctors
+        await loadAvailableDoctors();
+        
         setIsLoading(false);
       } catch (error) {
         console.error('Authentication check failed:', error);
         navigate('/auth/signin');
         setIsLoading(false);
       }
+    };
+
+    const loadAvailableDoctors = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+
+        const response = await fetch('http://localhost:3001/api/users/available-doctors', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const doctors = data.data.doctors || [];
+          
+          // Transform backend data to frontend format
+          const formattedDoctors = doctors.map((doctor, index) => ({
+            id: doctor._id,
+            name: `Dr. ${doctor.firstName} ${doctor.lastName}`,
+            specialty: doctor.specialization || 'General Practice',
+            rating: 4.5 + (Math.random() * 0.4), // Mock rating
+            nextAvailable: getNextAvailableSlot(doctor.availability),
+            color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][index % 4],
+            isAvailable: doctor.availability?.isAvailable && doctor.availability?.dailySchedule?.isActive,
+            availability: doctor.availability,
+            workingHours: getWorkingHours(doctor.availability)
+          }));
+          
+          setAvailableDoctors(formattedDoctors);
+        }
+      } catch (error) {
+        console.error('Error loading available doctors:', error);
+        // Keep empty array if API fails
+        setAvailableDoctors([]);
+      }
+    };
+
+    const getNextAvailableSlot = (availability) => {
+      if (!availability?.dailySchedule?.isActive) {
+        return 'Not available today';
+      }
+      
+      const now = new Date();
+      const currentTime = now.toTimeString().slice(0, 5);
+      const startTime = availability.dailySchedule.startTime;
+      
+      if (currentTime < startTime) {
+        return `Today ${startTime}`;
+      } else {
+        return `Tomorrow ${startTime}`;
+      }
+    };
+
+    const getWorkingHours = (availability) => {
+      if (!availability?.dailySchedule?.isActive) {
+        return { today: 'Unavailable' };
+      }
+      
+      return {
+        today: `${availability.dailySchedule.startTime} - ${availability.dailySchedule.endTime}`,
+        tomorrow: `${availability.dailySchedule.startTime} - ${availability.dailySchedule.endTime}` // For demo
+      };
     };
 
     checkAuth();
@@ -288,6 +357,11 @@ const PatientDashboard = () => {
     { metric: 'Temperature', value: '98.6°F', status: 'normal', trend: 'stable', color: 'blue' }
   ];
 
+  // Filter only available doctors
+  const getAvailableDoctors = () => {
+    return availableDoctors.filter(doctor => doctor.isAvailable);
+  };
+
   const sidebarItems = [
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-blue-600' },
     { id: 'symptom-checker', label: 'Symptom Checker', icon: BeakerIcon, gradient: 'from-green-500 to-green-600' },
@@ -332,7 +406,7 @@ const PatientDashboard = () => {
             <div className="relative bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 rounded-xl sm:rounded-2xl p-4 sm:p-8 overflow-hidden">
               <div className="relative z-10">
                 <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white mb-2">
-                  Welcome back, {user?.firstName || user?.name || 'Patient'}! 👋
+                  Welcome back, {user?.firstName || user?.name || 'Patient'}! 
                 </h2>
                 <p className="text-blue-100 text-sm sm:text-base lg:text-lg">
                   Here's your health overview for today • {currentTime.toLocaleDateString()}
@@ -559,21 +633,19 @@ const PatientDashboard = () => {
                 <div className="p-4 sm:p-6">
                   <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-4 sm:mb-6 flex items-center">
                     <UserIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 text-blue-600" />
-                    Available Doctors
+                    Available Doctors ({getAvailableDoctors().length})
                   </h3>
                   <div className="space-y-3 sm:space-y-4">
-                    {[
-                      { name: 'Dr. Sarah Johnson', specialty: 'Cardiology', rating: 4.9, nextAvailable: 'Tomorrow 10:00 AM', color: 'from-pink-500 to-rose-500' },
-                      { name: 'Dr. Michael Chen', specialty: 'General Medicine', rating: 4.8, nextAvailable: 'Today 3:30 PM', color: 'from-blue-500 to-indigo-500' },
-                      { name: 'Dr. Emily Davis', specialty: 'Dermatology', rating: 4.7, nextAvailable: 'Aug 6, 9:00 AM', color: 'from-purple-500 to-violet-500' }
-                    ].map((doctor, index) => (
-                      <div key={index} className="relative overflow-hidden rounded-lg sm:rounded-xl bg-gradient-to-r from-white to-gray-50 p-4 sm:p-6 border border-gray-100 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+                    {getAvailableDoctors().map((doctor, index) => (
+                      <div key={doctor.id} className="relative overflow-hidden rounded-lg sm:rounded-xl bg-gradient-to-r from-white to-gray-50 p-4 sm:p-6 border border-gray-100 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                           
                           {/* Doctor Info */}
                           <div className="flex items-center space-x-3 sm:space-x-4">
-                            <div className={`w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-r ${doctor.color} rounded-full flex items-center justify-center text-white shadow-lg flex-shrink-0`}>
+                            <div className={`w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-r ${doctor.color} rounded-full flex items-center justify-center text-white shadow-lg flex-shrink-0 relative`}>
                               <UserIcon className="w-6 h-6 sm:w-8 sm:h-8" />
+                              {/* Online indicator */}
+                              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-white rounded-full animate-pulse"></div>
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="font-bold text-base sm:text-lg text-gray-900 truncate">{doctor.name}</div>
@@ -582,6 +654,11 @@ const PatientDashboard = () => {
                                 <span className="text-yellow-400 text-base sm:text-lg">⭐</span>
                                 <span className="text-sm font-semibold text-gray-700">{doctor.rating}</span>
                                 <span className="text-xs text-gray-500 hidden sm:inline">(125+ reviews)</span>
+                              </div>
+                              {/* Availability indicator */}
+                              <div className="flex items-center space-x-1 mt-1">
+                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                <span className="text-xs text-green-600 font-medium">Available now</span>
                               </div>
                             </div>
                           </div>
@@ -592,17 +669,69 @@ const PatientDashboard = () => {
                               <div className="text-xs text-gray-500 font-medium">Next available:</div>
                               <div className="text-sm font-bold text-gray-800">{doctor.nextAvailable}</div>
                             </div>
-                            <Button 
-                              size="sm" 
-                              className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-md hover:shadow-lg transition-all duration-300"
-                            >
-                              <PhoneIcon className="w-4 h-4 mr-1" />
-                              Book Now
-                            </Button>
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <Button 
+                                size="sm" 
+                                className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-md hover:shadow-lg transition-all duration-300"
+                              >
+                                <PhoneIcon className="w-4 h-4 mr-1" />
+                                Book Now
+                              </Button>
+                              <Button 
+                                size="sm" 
+                                variant="outline"
+                                className="w-full sm:w-auto border-blue-300 text-blue-600 hover:bg-blue-50"
+                                onClick={() => {
+                                  // Show doctor's availability details with new daily structure
+                                  const availability = doctor.availability;
+                                  const workingHours = doctor.workingHours;
+                                  
+                                  let message = `${doctor.name}'s availability:\n\n`;
+                                  
+                                  if (availability?.dailySchedule?.isActive) {
+                                    message += `Today: Available ${availability.dailySchedule.startTime} - ${availability.dailySchedule.endTime}\n`;
+                                    if (availability.breakTime?.enabled) {
+                                      message += `Break: ${availability.breakTime.startTime} - ${availability.breakTime.endTime}\n`;
+                                    }
+                                    message += `Next available slot: ${doctor.nextAvailable}\n\n`;
+                                  } else {
+                                    message += `Today: Not available\n\n`;
+                                  }
+                                  
+                                  if (availability?.specialNotes) {
+                                    message += `Special Notes: ${availability.specialNotes}\n\n`;
+                                  }
+                                  
+                                  if (workingHours) {
+                                    message += `Working Hours:\n${Object.entries(workingHours).map(([day, hours]) => `${day.charAt(0).toUpperCase() + day.slice(1)}: ${hours}`).join('\n')}`;
+                                  }
+                                  
+                                  Swal.fire({
+                                    title: `${doctor.name}'s Schedule`,
+                                    text: message,
+                                    icon: 'info',
+                                    confirmButtonColor: '#3b82f6',
+                                    confirmButtonText: 'Book Appointment'
+                                  });
+                                }}
+                              >
+                                <ClockIcon className="w-4 h-4 mr-1" />
+                                Schedule
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
                     ))}
+                    
+                    {/* Show message if no doctors are available */}
+                    {getAvailableDoctors().length === 0 && (
+                      <div className="text-center py-8">
+                        <div className="text-gray-400 text-6xl mb-4">🏥</div>
+                        <h4 className="text-lg font-semibold text-gray-600 mb-2">No doctors currently available</h4>
+                        <p className="text-gray-500 text-sm">Please check back later or contact support for emergency care.</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </Card>

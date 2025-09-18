@@ -21,13 +21,14 @@ import {
   XMarkIcon,
   HeartIcon,
   ChartBarIcon,
-  BeakerIcon
+  BeakerIcon,
+  PowerIcon
 } from '@heroicons/react/24/outline';
 
 const DoctorDashboard = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('overview');
-  const [isOnline, setIsOnline] = useState(true);
+  const [isOnline, setIsOnline] = useState(false); // Default to offline
   const [showPatientModal, setShowPatientModal] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [showPrescriptionModal, setShowPrescriptionModal] = useState(false);
@@ -40,8 +41,32 @@ const DoctorDashboard = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [showExtensionModal, setShowExtensionModal] = useState(false);
+  const [hasTimeExceeded, setHasTimeExceeded] = useState(false);
+  const [showTimeInputs, setShowTimeInputs] = useState(false);
+  const [hasSetAvailability, setHasSetAvailability] = useState(false);
+  const [scheduleExpired, setScheduleExpired] = useState(false);
+  const [showExtensionPrompt, setShowExtensionPrompt] = useState(false);
+  const [showScheduleExpiredModal, setShowScheduleExpiredModal] = useState(false);
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
+
+  // Availability management state
+  const [doctorAvailability, setDoctorAvailability] = useState({
+    isAvailable: false, // Default to unavailable
+    dailySchedule: {
+      date: new Date().toISOString().split('T')[0],
+      isActive: false, // Default to inactive
+      startTime: '00:00', // Default to 00:00
+      endTime: '00:00'   // Default to 00:00
+    },
+    breakTime: {
+      enabled: false,
+      startTime: '12:00',
+      endTime: '13:00'
+    },
+    specialNotes: ''
+  });
 
   // Mock notifications data
   const notifications = [
@@ -72,6 +97,213 @@ const DoctorDashboard = () => {
   ];
 
   const unreadCount = notifications.filter(notification => notification.unread).length;
+
+  // Validation function for availability settings
+  const validateAvailabilitySettings = (availability) => {
+    const { startTime, endTime } = availability.dailySchedule;
+    
+    // Check if both times are set when going online
+    if (availability.isAvailable && (!startTime || !endTime)) {
+      Swal.fire({
+        title: 'Invalid Time Settings',
+        text: 'Please set both start time and end time to go online.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+      return false;
+    }
+
+    // Check if start time is before end time
+    if (availability.isAvailable && startTime && endTime) {
+      const [startHour, startMinute] = startTime.split(':').map(Number);
+      const [endHour, endMinute] = endTime.split(':').map(Number);
+      const startMinutes = startHour * 60 + startMinute;
+      const endMinutes = endHour * 60 + endMinute;
+
+      if (startMinutes >= endMinutes) {
+        Swal.fire({
+          title: 'Invalid Time Range',
+          text: 'Start time must be before end time.',
+          icon: 'warning',
+          confirmButtonColor: '#f59e0b'
+        });
+        return false;
+      }
+
+      // Check minimum availability duration (at least 30 minutes)
+      if (endMinutes - startMinutes < 30) {
+        Swal.fire({
+          title: 'Minimum Duration Required',
+          text: 'Availability duration must be at least 30 minutes.',
+          icon: 'warning',
+          confirmButtonColor: '#f59e0b'
+        });
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  // Helper function to get current time in HH:MM format for min attribute
+  const getCurrentTimeString = () => {
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
+  // Function to check if current time has exceeded scheduled end time
+  const checkScheduleExpiry = () => {
+    if (!hasSetAvailability || !doctorAvailability.dailySchedule.endTime) {
+      return false;
+    }
+
+    const currentTime = new Date();
+    const currentHours = currentTime.getHours();
+    const currentMinutes = currentTime.getMinutes();
+    const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+    const [endHour, endMinute] = doctorAvailability.dailySchedule.endTime.split(':').map(Number);
+    const endTotalMinutes = endHour * 60 + endMinute;
+
+    const isExpired = currentTotalMinutes > endTotalMinutes;
+    
+    // Update schedule expired state if it has expired and not already set
+    if (isExpired && !scheduleExpired) {
+      setScheduleExpired(true);
+    }
+    
+    return isExpired;
+  };
+
+  // Function to handle schedule extension
+  const handleScheduleExtension = () => {
+    setShowScheduleExpiredModal(true);
+    setShowExtensionPrompt(false);
+  };
+
+  // Function to handle extending schedule
+  const handleExtendSchedule = () => {
+    setShowScheduleExpiredModal(false);
+    setShowExtensionPrompt(false);
+    setActiveTab('availability');
+  };
+
+  // Function to handle going offline
+  const handleGoOffline = async () => {
+    const newAvailability = {
+      ...doctorAvailability,
+      isAvailable: false,
+      dailySchedule: {
+        ...doctorAvailability.dailySchedule,
+        isActive: false
+      }
+    };
+    
+    setIsOnline(false);
+    setDoctorAvailability(newAvailability);
+    setScheduleExpired(true);
+    setShowScheduleExpiredModal(false);
+    
+    // Save to database
+    await saveAvailabilityToDatabase(newAvailability);
+    
+    // Show confirmation
+    Swal.fire({
+      title: 'Gone Offline',
+      text: 'You are now offline. Patients cannot book new appointments.',
+      icon: 'info',
+      confirmButtonColor: '#6b7280',
+      timer: 2000,
+      showConfirmButton: false
+    });
+  };
+
+  // Function to save availability to database
+  const saveAvailabilityToDatabase = async (availability) => {
+    try {
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch('http://localhost:3001/api/users/doctor/availability', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ 
+          availability: {
+            ...availability,
+            dailySchedule: {
+              ...availability.dailySchedule,
+              date: new Date().toISOString().split('T')[0] // Always use current date
+            }
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        return { success: true, data };
+      } else {
+        throw new Error(data.message || 'Failed to save availability');
+      }
+    } catch (error) {
+      console.error('Error saving availability:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  // Enhanced function to handle going online with default times
+  const handleGoOnline = async () => {
+    const currentHour = new Date().getHours().toString().padStart(2, '0');
+    const currentMinute = new Date().getMinutes().toString().padStart(2, '0');
+    const currentTime = `${currentHour}:${currentMinute}`;
+    
+    // Set default end time to 8 hours from current time
+    const endHour = (new Date().getHours() + 8) % 24;
+    const defaultEndTime = `${endHour.toString().padStart(2, '0')}:${currentMinute}`;
+
+    const newAvailability = {
+      ...doctorAvailability,
+      isAvailable: true,
+      dailySchedule: {
+        ...doctorAvailability.dailySchedule,
+        isActive: true,
+        startTime: currentTime,
+        endTime: defaultEndTime
+      }
+    };
+
+    // Validate before setting
+    if (validateAvailabilitySettings(newAvailability)) {
+      setDoctorAvailability(newAvailability);
+      setIsOnline(true);
+      
+      // Save to database
+      const saveResult = await saveAvailabilityToDatabase(newAvailability);
+      
+      if (saveResult.success) {
+        Swal.fire({
+          title: 'Online!',
+          text: `You are now online from ${currentTime} to ${defaultEndTime}`,
+          icon: 'success',
+          confirmButtonColor: '#10b981',
+          timer: 3000,
+          showConfirmButton: false
+        });
+      } else {
+        // Show error but keep the UI updated
+        Swal.fire({
+          title: 'Warning',
+          text: 'You are online locally, but failed to sync with server. Please check your connection.',
+          icon: 'warning',
+          confirmButtonColor: '#f59e0b'
+        });
+      }
+    }
+  };
 
   // Check authentication and role on component mount
   useEffect(() => {
@@ -107,6 +339,55 @@ const DoctorDashboard = () => {
             const currentUser = data.data.user;
             
             setUser(currentUser);
+            
+            // Load doctor's availability if user has doctor role
+            if (currentUser.userType === 'doctor') {
+              try {
+                const availabilityResponse = await fetch('http://localhost:3001/api/users/doctor/availability', {
+                  headers: {
+                    'Authorization': `Bearer ${token}`
+                  }
+                });
+
+                if (availabilityResponse.ok) {
+                  const availabilityData = await availabilityResponse.json();
+                  if (availabilityData.data.availability) {
+                    setDoctorAvailability(availabilityData.data.availability);
+                    
+                    // Check if doctor has previously set availability
+                    const availability = availabilityData.data.availability;
+                    const hasSchedule = availability.dailySchedule && 
+                                       (availability.dailySchedule.startTime || 
+                                        availability.dailySchedule.endTime ||
+                                        availability.dailySchedule.breakStart ||
+                                        availability.dailySchedule.breakEnd);
+                    setHasSetAvailability(!!hasSchedule);
+                    
+                    // Check if the schedule has already expired
+                    if (hasSchedule && availability.dailySchedule.endTime) {
+                      const currentTime = new Date();
+                      const currentHours = currentTime.getHours();
+                      const currentMinutes = currentTime.getMinutes();
+                      const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+                      const [endHour, endMinute] = availability.dailySchedule.endTime.split(':').map(Number);
+                      const endTotalMinutes = endHour * 60 + endMinute;
+
+                      if (currentTotalMinutes > endTotalMinutes) {
+                        setScheduleExpired(true);
+                        // If the schedule is expired, set the doctor as offline
+                        setIsOnline(false);
+                      } else {
+                        // If within schedule time and isAvailable, set online
+                        setIsOnline(availability.isAvailable && availability.dailySchedule.isActive);
+                      }
+                    }
+                  }
+                }
+              } catch (availabilityError) {
+                console.error('Error loading availability:', availabilityError);
+              }
+            }
           } else {
             // Fallback to localStorage data if API fails
             console.log('⚠️ API failed, using localStorage data');
@@ -163,6 +444,17 @@ const DoctorDashboard = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Monitor schedule expiry
+  useEffect(() => {
+    if (hasSetAvailability && isOnline && !scheduleExpired && activeTab !== 'availability') {
+      const isExpired = checkScheduleExpiry();
+      if (isExpired && !showExtensionPrompt && !showScheduleExpiredModal) {
+        setShowExtensionPrompt(true);
+        handleScheduleExtension();
+      }
+    }
+  }, [currentTime, hasSetAvailability, isOnline, scheduleExpired, showExtensionPrompt, activeTab, showScheduleExpiredModal]);
+
   // Handle clicks outside dropdowns
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -192,6 +484,37 @@ const DoctorDashboard = () => {
     window.addEventListener('resize', checkScreenSize);
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
+
+  // Monitor availability time and prompt for extension
+  useEffect(() => {
+    let timeCheckInterval;
+
+    if (isOnline && doctorAvailability.dailySchedule.isActive) {
+      timeCheckInterval = setInterval(() => {
+        const now = new Date();
+        const currentTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+        const endTime = doctorAvailability.dailySchedule.endTime;
+
+        // Convert times to minutes for comparison
+        const [currentHour, currentMinute] = currentTime.split(':').map(Number);
+        const [endHour, endMinute] = endTime.split(':').map(Number);
+        const currentMinutes = currentHour * 60 + currentMinute;
+        const endMinutes = endHour * 60 + endMinute;
+
+        // Check if current time has exceeded end time and we haven't already shown the modal
+        if (currentMinutes >= endMinutes && !hasTimeExceeded && !showExtensionModal) {
+          setHasTimeExceeded(true);
+          setShowExtensionModal(true);
+        }
+      }, 60000); // Check every minute
+    }
+
+    return () => {
+      if (timeCheckInterval) {
+        clearInterval(timeCheckInterval);
+      }
+    };
+  }, [isOnline, doctorAvailability.dailySchedule.isActive, doctorAvailability.dailySchedule.endTime, hasTimeExceeded, showExtensionModal]);
 
   const onLogout = () => {
     Swal.fire({
@@ -223,6 +546,7 @@ const DoctorDashboard = () => {
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-blue-600' },
     { id: 'appointments', label: 'Appointments', icon: CalendarDaysIcon, gradient: 'from-green-500 to-green-600' },
     { id: 'patients', label: 'Patients', icon: UsersIcon, gradient: 'from-purple-500 to-purple-600' },
+    { id: 'availability', label: 'Availability', icon: ClockIcon, gradient: 'from-emerald-500 to-emerald-600' },
     { id: 'prescriptions', label: 'E-Prescribe', icon: BeakerIcon, gradient: 'from-pink-500 to-rose-600' },
     { id: 'records', label: 'Records', icon: DocumentTextIcon, gradient: 'from-indigo-500 to-indigo-600' },
     { id: 'chat', label: 'Chat', icon: ChatBubbleLeftIcon, gradient: 'from-cyan-500 to-cyan-600' }
@@ -320,29 +644,157 @@ const DoctorDashboard = () => {
             <div className="relative bg-gradient-to-r from-green-600 via-blue-600 to-purple-700 rounded-xl sm:rounded-2xl p-4 sm:p-8 overflow-hidden">
               <div className="relative z-10">
                 <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white mb-2">
-                  Welcome back, Dr. {user?.firstName || user?.name || 'Doctor'}! 👩‍⚕️
+                  Welcome back, Dr. {user?.firstName || user?.name || 'Doctor'}! 
                 </h2>
                 <p className="text-green-100 text-sm sm:text-base lg:text-lg">
                   Your medical practice overview • {currentTime.toLocaleDateString()}
                 </p>
                 <div className="flex flex-col sm:flex-row sm:items-center mt-4 space-y-2 sm:space-y-0 sm:space-x-4">
-                  <div className={`flex items-center space-x-2 px-4 py-2 rounded-full ${
-                    isOnline ? 'bg-green-500/20 text-green-100' : 'bg-red-500/20 text-red-100'
-                  }`}>
-                    <div className={`w-3 h-3 rounded-full ${
-                      isOnline ? 'bg-green-300' : 'bg-red-300'
-                    } animate-pulse`}></div>
-                    <span className="text-sm font-medium">
-                      {isOnline ? 'Online & Available' : 'Offline'}
-                    </span>
+                  {!hasSetAvailability ? (
+                    // Initial state - show setup prompt
+                    <>
+                      <div className="flex items-center space-x-2 px-4 py-2 rounded-full bg-orange-500/20 text-orange-100">
+                        <div className="w-3 h-3 rounded-full bg-orange-300 animate-pulse"></div>
+                        <span className="text-sm font-medium">Schedule Not Set</span>
+                      </div>
+                      <Button 
+                        onClick={() => setActiveTab('availability')}
+                        className="bg-emerald-500/30 hover:bg-emerald-500/40 text-white border-emerald-300/30 text-sm"
+                        size="sm"
+                      >
+                        Set Today's Schedule
+                      </Button>
+                    </>
+                  ) : (
+                    // After availability is set - show online/offline controls
+                    <>
+                      <div className={`flex items-center space-x-2 px-4 py-2 rounded-full ${
+                        isOnline && doctorAvailability.dailySchedule.isActive ? 'bg-green-500/20 text-green-100' : 'bg-red-500/20 text-red-100'
+                      }`}>
+                        <div className={`w-3 h-3 rounded-full ${
+                          isOnline && doctorAvailability.dailySchedule.isActive ? 'bg-green-300' : 'bg-red-300'
+                        } animate-pulse`}></div>
+                        <span className="text-sm font-medium">
+                          {isOnline && doctorAvailability.dailySchedule.isActive ? 'Online & Available' : 'Offline'}
+                        </span>
+                      </div>
+                      <Button 
+                        onClick={() => {
+                          if (!isOnline) {
+                            // Check if schedule has expired
+                            if (scheduleExpired || checkScheduleExpiry()) {
+                              Swal.fire({
+                                title: 'Schedule Expired',
+                                text: 'Your previous schedule has expired. Please set a new schedule before going online.',
+                                icon: 'warning',
+                                confirmButtonColor: '#f59e0b',
+                                confirmButtonText: 'Set New Schedule'
+                              }).then(() => {
+                                setActiveTab('availability');
+                              });
+                              return;
+                            }
+
+                            // Going online - set both states
+                            const newAvailability = {
+                              ...doctorAvailability,
+                              isAvailable: true,
+                              dailySchedule: {
+                                ...doctorAvailability.dailySchedule,
+                                isActive: true
+                              }
+                            };
+                            
+                            setIsOnline(true);
+                            setDoctorAvailability(newAvailability);
+                            
+                            // Save to database
+                            saveAvailabilityToDatabase(newAvailability);
+                          } else {
+                            // Going offline
+                            const newAvailability = {
+                              ...doctorAvailability,
+                              isAvailable: false,
+                              dailySchedule: {
+                                ...doctorAvailability.dailySchedule,
+                                isActive: false
+                              }
+                            };
+                            
+                            setIsOnline(false);
+                            setDoctorAvailability(newAvailability);
+                            
+                            // Save to database
+                            saveAvailabilityToDatabase(newAvailability);
+                          }
+                        }}
+                        className="bg-white/20 hover:bg-white/30 text-white border-white/20 text-sm"
+                        size="sm"
+                      >
+                        {isOnline ? 'Go Offline' : 'Go Online'}
+                      </Button>
+                    </>
+                  )}
+                </div>
+
+                {/* Quick Availability Controls */}
+                <div className="mt-6 bg-white/10 backdrop-blur-sm rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <ClockIcon className="w-5 h-5 text-white" />
+                      <span className="text-white font-medium text-sm sm:text-base">Today's Schedule</span>
+                    </div>
+                    
+                    <div className="flex items-center space-x-3">
+                      <Button 
+                        onClick={() => setActiveTab('availability')}
+                        className="bg-emerald-500/20 hover:bg-emerald-500/30 text-white border-emerald-300/30 text-xs sm:text-sm px-3 py-1 flex items-center space-x-1"
+                        size="sm"
+                      >
+                        <ClockIcon className="w-3 h-3 sm:w-4 sm:h-4 " />
+                        <span className="hidden sm:inline">Manage Availability</span>
+                        <span className="sm:hidden">Manage</span>
+                      </Button>
+                    </div>
                   </div>
-                  <Button 
-                    onClick={() => setIsOnline(!isOnline)}
-                    className="bg-white/20 hover:bg-white/30 text-white border-white/20 text-sm"
-                    size="sm"
-                  >
-                    {isOnline ? 'Go Offline' : 'Go Online'}
-                  </Button>
+                  
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between space-y-3 sm:space-y-0 mt-4">
+                    
+                    <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
+                      {hasSetAvailability && doctorAvailability.dailySchedule.startTime && doctorAvailability.dailySchedule.endTime ? (
+                        <div className="space-y-2">
+                          <div className="text-white text-sm sm:text-base font-medium">
+                            {doctorAvailability.dailySchedule.startTime} - {doctorAvailability.dailySchedule.endTime}
+                            {doctorAvailability.breakTime?.enabled && (
+                              <span className="text-white/80 text-xs sm:text-sm ml-2">
+                                (Break: {doctorAvailability.breakTime.startTime}-{doctorAvailability.breakTime.endTime})
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <div className={`w-2 h-2 rounded-full ${
+                              scheduleExpired ? 'bg-red-400' : (
+                                checkScheduleExpiry() ? 'bg-orange-400 animate-pulse' : 'bg-green-400'
+                              )
+                            }`}></div>
+                            <span className={`text-xs ${
+                              scheduleExpired ? 'text-red-200' : (
+                                checkScheduleExpiry() ? 'text-orange-200' : 'text-green-200'
+                              )
+                            }`}>
+                              {scheduleExpired ? 'Schedule Expired' : (
+                                checkScheduleExpiry() ? 'Schedule Ending Soon' : 'Active Schedule'
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-red-200 text-sm">
+                          No schedule set for today
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
               {/* Decorative elements */}
@@ -603,6 +1055,365 @@ const DoctorDashboard = () => {
                   </div>
                 </Card>
               ))}
+            </div>
+          </div>
+        );
+
+      case 'availability':
+        return (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
+                <ClockIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-emerald-600" />
+                <span className="hidden sm:inline">Availability Management</span>
+                <span className="sm:hidden">Availability</span>
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Daily Schedule */}
+              <Card className="lg:col-span-2 bg-white/80 backdrop-blur-sm border-0 shadow-xl">
+                <div className="p-6">
+                  <h3 className="text-lg font-bold text-gray-900 mb-6 flex items-center">
+                    <CalendarDaysIcon className="w-5 h-5 mr-2 text-emerald-600" />
+                    Today's Schedule - {new Date().toLocaleDateString('en-US', { 
+                      weekday: 'long', 
+                      year: 'numeric', 
+                      month: 'long', 
+                      day: 'numeric' 
+                    })}
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="p-6 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors duration-200">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <span className="font-medium text-gray-900">
+                            Today's Schedule
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-3">
+                          <div className={`flex items-center space-x-2 px-3 py-1 rounded-full ${
+                            doctorAvailability.dailySchedule.isActive 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            <div className={`w-2 h-2 rounded-full ${
+                              doctorAvailability.dailySchedule.isActive ? 'bg-green-500' : 'bg-red-500'
+                            } animate-pulse`}></div>
+                            <span className="text-sm font-medium">
+                              {doctorAvailability.dailySchedule.isActive ? 'Available' : 'Unavailable'}
+                            </span>
+                          </div>
+                          <Button
+                            onClick={() => {
+                              const newStatus = !doctorAvailability.dailySchedule.isActive;
+                              setDoctorAvailability(prev => ({
+                                ...prev,
+                                dailySchedule: {
+                                  ...prev.dailySchedule,
+                                  isActive: newStatus
+                                }
+                              }));
+                              // Show time inputs when making available
+                              setShowTimeInputs(newStatus);
+                            }}
+                            className={`px-3 py-1 text-white text-xs rounded-lg transition-all duration-200 ${
+                              doctorAvailability.dailySchedule.isActive
+                                ? 'bg-red-500 hover:bg-red-600'
+                                : 'bg-green-500 hover:bg-green-600'
+                            }`}
+                            size="sm"
+                          >
+                            {doctorAvailability.dailySchedule.isActive ? 'Set Unavailable' : 'Set Available'}
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      {doctorAvailability.dailySchedule.isActive && (
+                        <div className="space-y-4">
+                          <div className="flex items-center space-x-4">
+                            <div className="flex-1">
+                              <label className="text-sm text-gray-600 mb-1 block">Start Time</label>
+                              <input
+                                type="time"
+                                value={doctorAvailability.dailySchedule.startTime}
+                                min={getCurrentTimeString()}
+                                onChange={(e) => {
+                                  const newStartTime = e.target.value;
+                                  const { endTime } = doctorAvailability.dailySchedule;
+                                  
+                                  // Validate start time is not after end time
+                                  if (endTime && newStartTime >= endTime) {
+                                    Swal.fire({
+                                      title: 'Invalid Time',
+                                      text: 'Start time must be before end time.',
+                                      icon: 'warning',
+                                      confirmButtonColor: '#f59e0b',
+                                      timer: 2000,
+                                      showConfirmButton: false
+                                    });
+                                    return;
+                                  }
+                                  
+                                  setDoctorAvailability(prev => ({
+                                    ...prev,
+                                    dailySchedule: { 
+                                      ...prev.dailySchedule, 
+                                      startTime: newStartTime 
+                                    }
+                                  }));
+                                }}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-sm text-gray-600 mb-1 block">End Time</label>
+                              <input
+                                type="time"
+                                value={doctorAvailability.dailySchedule.endTime}
+                                min={doctorAvailability.dailySchedule.startTime || getCurrentTimeString()}
+                                onChange={(e) => {
+                                  const newEndTime = e.target.value;
+                                  const { startTime } = doctorAvailability.dailySchedule;
+                                  
+                                  // Validate end time is after start time
+                                  if (startTime && newEndTime <= startTime) {
+                                    Swal.fire({
+                                      title: 'Invalid Time',
+                                      text: 'End time must be after start time.',
+                                      icon: 'warning',
+                                      confirmButtonColor: '#f59e0b',
+                                      timer: 2000,
+                                      showConfirmButton: false
+                                    });
+                                    return;
+                                  }
+                                  
+                                  // Validate minimum duration (30 minutes)
+                                  if (startTime && newEndTime) {
+                                    const [startHour, startMinute] = startTime.split(':').map(Number);
+                                    const [endHour, endMinute] = newEndTime.split(':').map(Number);
+                                    const startMinutes = startHour * 60 + startMinute;
+                                    const endMinutes = endHour * 60 + endMinute;
+                                    
+                                    if (endMinutes - startMinutes < 30) {
+                                      Swal.fire({
+                                        title: 'Minimum Duration Required',
+                                        text: 'Availability duration must be at least 30 minutes.',
+                                        icon: 'warning',
+                                        confirmButtonColor: '#f59e0b',
+                                        timer: 2000,
+                                        showConfirmButton: false
+                                      });
+                                      return;
+                                    }
+                                  }
+                                  
+                                  setDoctorAvailability(prev => ({
+                                    ...prev,
+                                    dailySchedule: { 
+                                      ...prev.dailySchedule, 
+                                      endTime: newEndTime 
+                                    }
+                                  }));
+                                  // Reset time exceeded flag when manually changing end time
+                                  setHasTimeExceeded(false);
+                                }}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                              />
+                            </div>
+                          </div>
+                          
+                          <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <ClockIcon className="w-4 h-4 text-blue-600" />
+                              <span className="text-sm font-medium text-blue-800">Schedule Summary</span>
+                            </div>
+                            <p className="text-sm text-blue-700">
+                              Available from {doctorAvailability.dailySchedule.startTime} to {doctorAvailability.dailySchedule.endTime}
+                              {doctorAvailability.breakTime.enabled && (
+                                <span> (Break: {doctorAvailability.breakTime.startTime} - {doctorAvailability.breakTime.endTime})</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {!doctorAvailability.dailySchedule.isActive && (
+                        <div className="text-center py-8">
+                          <div className="text-gray-400 mb-2">
+                            <ClockIcon className="w-12 h-12 mx-auto" />
+                          </div>
+                          <span className="text-gray-500 font-medium">Not available today</span>
+                          <p className="text-sm text-gray-400 mt-1">Click "Set Available" to set your availability</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Break Time & Settings */}
+              <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl">
+                <div className="p-6 space-y-6">
+                  {/* Break Time */}
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                      <ClockIcon className="w-5 h-5 mr-2 text-orange-600" />
+                      Break Time
+                    </h3>
+                    <div className="space-y-4">
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={doctorAvailability.breakTime.enabled}
+                          onChange={(e) => setDoctorAvailability(prev => ({
+                            ...prev,
+                            breakTime: { ...prev.breakTime, enabled: e.target.checked }
+                          }))}
+                          className="w-4 h-4 text-orange-600 bg-gray-100 border-gray-300 rounded focus:ring-orange-500 focus:ring-2"
+                        />
+                        <span className="text-sm font-medium text-gray-700">Enable daily break</span>
+                      </div>
+                      
+                      {doctorAvailability.breakTime.enabled && (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-sm text-gray-600 mb-1 block">Start Time</label>
+                            <input
+                              type="time"
+                              value={doctorAvailability.breakTime.startTime}
+                              min={doctorAvailability.dailySchedule.startTime || getCurrentTimeString()}
+                              max={doctorAvailability.dailySchedule.endTime}
+                              onChange={(e) => setDoctorAvailability(prev => ({
+                                ...prev,
+                                breakTime: { ...prev.breakTime, startTime: e.target.value }
+                              }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-600 mb-1 block">End Time</label>
+                            <input
+                              type="time"
+                              value={doctorAvailability.breakTime.endTime}
+                              min={doctorAvailability.breakTime.startTime || doctorAvailability.dailySchedule.startTime || getCurrentTimeString()}
+                              max={doctorAvailability.dailySchedule.endTime}
+                              onChange={(e) => setDoctorAvailability(prev => ({
+                                ...prev,
+                                breakTime: { ...prev.breakTime, endTime: e.target.value }
+                              }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Special Notes */}
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                      <DocumentTextIcon className="w-5 h-5 mr-2 text-blue-600" />
+                      Special Notes
+                    </h3>
+                    <textarea
+                      value={doctorAvailability.specialNotes}
+                      onChange={(e) => setDoctorAvailability(prev => ({
+                        ...prev,
+                        specialNotes: e.target.value
+                      }))}
+                      placeholder="Add any special notes about your availability..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                      rows={4}
+                    />
+                  </div>
+                </div>
+              </Card>
+            </div>
+            
+            {/* Save Complete Availability Button */}
+            <div className="mt-6 flex justify-center">
+              <Button 
+                onClick={async () => {
+                  // Always set the doctor as available when saving
+                  const updatedAvailability = {
+                    ...doctorAvailability,
+                    isAvailable: true,
+                    dailySchedule: {
+                      ...doctorAvailability.dailySchedule,
+                      isActive: true
+                    }
+                  };
+
+                  // Validate settings before saving
+                  const isValid = validateAvailabilitySettings(updatedAvailability);
+                  if (!isValid) {
+                    return;
+                  }
+
+                  try {
+                    setIsLoading(true);
+                    
+                    // Update local state first
+                    setDoctorAvailability(updatedAvailability);
+                    setIsOnline(true);
+                    
+                    // Save to database
+                    await saveAvailabilityToDatabase(updatedAvailability);
+                    
+                    // Set that the doctor has now configured their availability
+                    setHasSetAvailability(true);
+                    
+                    // Reset schedule expiry flags when new schedule is set
+                    setScheduleExpired(false);
+                    setShowExtensionPrompt(false);
+                    setShowScheduleExpiredModal(false);
+                    
+                    // Success - redirect to overview
+                    Swal.fire({
+                      title: 'Success!',
+                      text: 'You are now available! Your details have been saved successfully.',
+                      icon: 'success',
+                      confirmButtonColor: '#10b981',
+                      timer: 1500,
+                      showConfirmButton: false
+                    });
+                    
+                    // Redirect to overview after state is updated
+                    setTimeout(() => {
+                      setActiveTab('overview');
+                    }, 1600);
+                    
+                  } catch (error) {
+                    console.error('Error saving availability:', error);
+                    Swal.fire({
+                      title: 'Error!',
+                      text: error.message || 'Failed to save availability details',
+                      icon: 'error',
+                      confirmButtonColor: '#ef4444',
+                      confirmButtonText: 'Try Again'
+                    });
+                  } finally {
+                    setIsLoading(false);
+                  }
+                }}
+                disabled={isLoading}
+                className="px-8 py-3 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 disabled:opacity-50"
+                size="lg"
+              >
+                {isLoading ? (
+                  <div className="flex items-center justify-center">
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                  </div>
+                ) : (
+                  'Save Availability Details'
+                )}
+              </Button>
             </div>
           </div>
         );
@@ -1385,9 +2196,99 @@ const DoctorDashboard = () => {
         </div>
       )}
 
-      {/* Floating Online Status Button */}
+      {/* Floating Availability Toggle Button */}
       <button
-        onClick={() => setIsOnline(!isOnline)}
+        onClick={async () => {
+          if (!hasSetAvailability) {
+            // If no schedule is set, redirect to availability section
+            setActiveTab('availability');
+            return;
+          }
+
+          if (!isOnline) {
+            // Check if schedule has expired
+            if (scheduleExpired || checkScheduleExpiry()) {
+              Swal.fire({
+                title: 'Schedule Expired',
+                text: 'Your previous schedule has expired. Please set a new schedule before going online.',
+                icon: 'warning',
+                confirmButtonColor: '#f59e0b',
+                confirmButtonText: 'Set New Schedule'
+              }).then(() => {
+                setActiveTab('availability');
+              });
+              return;
+            }
+
+            // Going online - set both states
+            const newAvailability = {
+              ...doctorAvailability,
+              isAvailable: true,
+              dailySchedule: {
+                ...doctorAvailability.dailySchedule,
+                isActive: true
+              }
+            };
+            
+            setIsOnline(true);
+            setDoctorAvailability(newAvailability);
+            
+            // Save to database
+            const saveResult = await saveAvailabilityToDatabase(newAvailability);
+            
+            if (saveResult.success) {
+              Swal.fire({
+                title: 'Online',
+                text: 'You are now online and available for appointments.',
+                icon: 'success',
+                confirmButtonColor: '#10b981',
+                timer: 2000,
+                showConfirmButton: false
+              });
+            } else {
+              Swal.fire({
+                title: 'Warning',
+                text: 'You are online locally, but failed to sync with server.',
+                icon: 'warning',
+                confirmButtonColor: '#f59e0b'
+              });
+            }
+          } else {
+            // Going offline - set everything to offline/unavailable
+            const newAvailability = {
+              ...doctorAvailability,
+              isAvailable: false,
+              dailySchedule: {
+                ...doctorAvailability.dailySchedule,
+                isActive: false
+              }
+            };
+            
+            setIsOnline(false);
+            setDoctorAvailability(newAvailability);
+            
+            // Save offline status to database
+            const saveResult = await saveAvailabilityToDatabase(newAvailability);
+            
+            if (saveResult.success) {
+              Swal.fire({
+                title: 'Offline',
+                text: 'You are now offline. Patients cannot book new appointments.',
+                icon: 'info',
+                confirmButtonColor: '#6b7280',
+                timer: 2000,
+                showConfirmButton: false
+              });
+            } else {
+              Swal.fire({
+                title: 'Warning',
+                text: 'You are offline locally, but failed to sync with server.',
+                icon: 'warning',
+                confirmButtonColor: '#f59e0b'
+              });
+            }
+          }
+        }}
         className={`
           fixed w-14 h-14 sm:w-16 sm:h-16 ${
             isOnline 
@@ -1398,9 +2299,65 @@ const DoctorDashboard = () => {
           ${isMobile ? 'bottom-20 right-4' : 'bottom-8 right-8'}
           z-50
         `}
+        title={isOnline ? 'Go Offline' : 'Go Online'}
       >
-        <span className="text-lg sm:text-2xl">{isOnline ? '🟢' : '🔴'}</span>
+        <PowerIcon className={`w-6 h-6 sm:w-8 sm:h-8 ${isOnline ? 'text-white' : 'text-white'}`} />
       </button>
+
+      
+      {/* Schedule Expired Modal */}
+      {showScheduleExpiredModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 transform animate-in fade-in zoom-in duration-500">
+            {/* Header with animated icon */}
+            <div className="text-center mb-8">
+              <div className="relative w-20 h-20 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
+                <ClockIcon className="w-10 h-10 text-white" />
+                <div className="absolute inset-0 bg-gradient-to-br from-orange-400 to-red-500 rounded-full animate-ping opacity-75"></div>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-3">Schedule Time Ended</h3>
+              <p className="text-gray-600 text-lg leading-relaxed">
+                Your scheduled availability time 
+                <span className="font-semibold text-orange-600 mx-1">
+                  ({doctorAvailability.dailySchedule.startTime} - {doctorAvailability.dailySchedule.endTime})
+                </span>
+                has ended. What would you like to do?
+              </p>
+            </div>
+            
+            {/* Action buttons */}
+            <div className="space-y-4">
+              <Button
+                onClick={handleExtendSchedule}
+                className="w-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-[1.02] py-4 text-lg font-semibold"
+              >
+                <div className="flex items-center justify-center">
+                  <ClockIcon className="w-5 h-5 mr-3" />
+                  <span>Extend My Schedule</span>
+                </div>
+              </Button>
+              
+              <Button
+                onClick={handleGoOffline}
+                variant="outline"
+                className="w-full border-2 border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-all duration-300 transform hover:scale-[1.02] py-4 text-lg font-semibold"
+              >
+                <div className="flex items-center justify-center">
+                  <PowerIcon className="w-5 h-5 mr-3" />
+                  <span>Go Offline</span>
+                </div>
+              </Button>
+            </div>
+            
+            {/* Info note */}
+            <div className="mt-6 p-4 bg-blue-50 rounded-2xl border border-blue-200">
+              <p className="text-sm text-blue-700 text-center font-medium">
+                💡 You can always adjust your schedule in the Availability section
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Toast Container */}
       <ToastContainer
