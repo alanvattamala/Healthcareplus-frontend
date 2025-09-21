@@ -48,6 +48,9 @@ const DoctorDashboard = () => {
   const [scheduleExpired, setScheduleExpired] = useState(false);
   const [showExtensionPrompt, setShowExtensionPrompt] = useState(false);
   const [showScheduleExpiredModal, setShowScheduleExpiredModal] = useState(false);
+  const [showScheduleStartModal, setShowScheduleStartModal] = useState(false);
+  const [scheduleJustStarted, setScheduleJustStarted] = useState(false);
+  const [wasWithinSchedule, setWasWithinSchedule] = useState(false);
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
 
@@ -67,6 +70,21 @@ const DoctorDashboard = () => {
     },
     specialNotes: ''
   });
+
+  // Consultation fee management state
+  const [consultationFee, setConsultationFee] = useState({
+    amount: null,
+    status: 'not_set', // 'not_set', 'pending', 'approved', 'rejected'
+    rejectionReason: null
+  });
+  const [showConsultationFeeModal, setShowConsultationFeeModal] = useState(false);
+  const [showRejectionModal, setShowRejectionModal] = useState(false);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [rejectionDetails, setRejectionDetails] = useState(null);
+  const [approvalDetails, setApprovalDetails] = useState(null);
+  const [feeAmount, setFeeAmount] = useState('');
+  const [feeValidationError, setFeeValidationError] = useState('');
+  const [currency, setCurrency] = useState('INR');
 
   // Mock notifications data
   const notifications = [
@@ -169,16 +187,51 @@ const DoctorDashboard = () => {
 
     const isExpired = currentTotalMinutes > endTotalMinutes;
     
-    // Update schedule expired state if it has expired and not already set
-    if (isExpired && !scheduleExpired) {
-      setScheduleExpired(true);
-    }
-    
     return isExpired;
+  };
+
+  // Function to check if current time is within scheduled period
+  const isWithinScheduledTime = () => {
+    if (!hasSetAvailability || !doctorAvailability.dailySchedule.startTime || !doctorAvailability.dailySchedule.endTime) {
+      return false;
+    }
+
+    const currentTime = new Date();
+    const currentHours = currentTime.getHours();
+    const currentMinutes = currentTime.getMinutes();
+    const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+    const [startHour, startMinute] = doctorAvailability.dailySchedule.startTime.split(':').map(Number);
+    const startTotalMinutes = startHour * 60 + startMinute;
+
+    const [endHour, endMinute] = doctorAvailability.dailySchedule.endTime.split(':').map(Number);
+    const endTotalMinutes = endHour * 60 + endMinute;
+
+    return currentTotalMinutes >= startTotalMinutes && currentTotalMinutes <= endTotalMinutes;
+  };
+
+  // Function to check if schedule just started (within 2 minutes of start time or just entered schedule)
+  const checkScheduleJustStarted = () => {
+    if (!hasSetAvailability || !doctorAvailability.dailySchedule.startTime) {
+      return false;
+    }
+
+    const currentTime = new Date();
+    const currentHours = currentTime.getHours();
+    const currentMinutes = currentTime.getMinutes();
+    const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+    const [startHour, startMinute] = doctorAvailability.dailySchedule.startTime.split(':').map(Number);
+    const startTotalMinutes = startHour * 60 + startMinute;
+
+    // Check if current time is within 2 minutes of start time (gives more flexibility)
+    const timeDifference = currentTotalMinutes - startTotalMinutes;
+    return timeDifference >= 0 && timeDifference <= 2;
   };
 
   // Function to handle schedule extension
   const handleScheduleExtension = () => {
+    console.log('handleScheduleExtension called - showing modal');
     setShowScheduleExpiredModal(true);
     setShowExtensionPrompt(false);
   };
@@ -186,8 +239,130 @@ const DoctorDashboard = () => {
   // Function to handle extending schedule
   const handleExtendSchedule = () => {
     setShowScheduleExpiredModal(false);
-    setShowExtensionPrompt(false);
-    setActiveTab('availability');
+    
+    // Show options for quick extension
+    Swal.fire({
+      title: 'Extend Your Schedule',
+      text: 'How would you like to extend your availability?',
+      icon: 'question',
+      showCancelButton: true,
+      showDenyButton: true,
+      confirmButtonText: 'Extend by 1 Hour',
+      denyButtonText: 'Extend by 2 Hours',
+      cancelButtonText: 'Custom Extension',
+      confirmButtonColor: '#10b981',
+      denyButtonColor: '#0ea5e9',
+      cancelButtonColor: '#6b7280'
+    }).then(async (result) => {
+      if (result.isConfirmed) {
+        // Extend by 1 hour
+        await extendScheduleByHours(1);
+      } else if (result.isDenied) {
+        // Extend by 2 hours
+        await extendScheduleByHours(2);
+      } else if (result.dismiss === Swal.DismissReason.cancel) {
+        // Redirect to availability section for custom extension
+        setActiveTab('availability');
+      }
+    });
+  };
+
+  // Function to extend schedule by specified hours
+  const extendScheduleByHours = async (hours) => {
+    const [endHour, endMinute] = doctorAvailability.dailySchedule.endTime.split(':').map(Number);
+    const newEndHour = (endHour + hours) % 24;
+    const newEndTime = `${newEndHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+    
+    const updatedAvailability = {
+      ...doctorAvailability,
+      dailySchedule: {
+        ...doctorAvailability.dailySchedule,
+        endTime: newEndTime,
+        isActive: true
+      },
+      isAvailable: true
+    };
+
+    try {
+      // Update local state
+      setDoctorAvailability(updatedAvailability);
+      setScheduleExpired(false);
+      setShowExtensionPrompt(false);
+      setIsOnline(true);
+
+      // Save to database
+      const saveResult = await saveAvailabilityToDatabase(updatedAvailability);
+      
+      if (saveResult.success) {
+        Swal.fire({
+          title: 'Schedule Extended!',
+          text: `Your availability has been extended until ${newEndTime}. You are now online.`,
+          icon: 'success',
+          confirmButtonColor: '#10b981',
+          timer: 3000,
+          showConfirmButton: false
+        });
+      } else {
+        throw new Error('Failed to save to database');
+      }
+    } catch (error) {
+      console.error('Error extending schedule:', error);
+      Swal.fire({
+        title: 'Extension Failed',
+        text: 'Schedule extended locally but failed to sync with server.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+    }
+  };
+
+  // Persistence functions for schedule state
+  const saveScheduleStateToLocalStorage = (state) => {
+    try {
+      const userId = user?.id;
+      if (userId) {
+        const scheduleState = {
+          scheduleExpired: state.scheduleExpired,
+          scheduleJustStarted: state.scheduleJustStarted,
+          hasSetAvailability: state.hasSetAvailability,
+          timestamp: Date.now()
+        };
+        localStorage.setItem(`doctorScheduleState_${userId}`, JSON.stringify(scheduleState));
+      }
+    } catch (error) {
+      console.error('Error saving schedule state to localStorage:', error);
+    }
+  };
+
+  const loadScheduleStateFromLocalStorage = () => {
+    try {
+      const userId = user?.id;
+      if (userId) {
+        const saved = localStorage.getItem(`doctorScheduleState_${userId}`);
+        if (saved) {
+          const state = JSON.parse(saved);
+          // Only restore state if it's from today (within 24 hours)
+          const isRecent = Date.now() - state.timestamp < 24 * 60 * 60 * 1000;
+          if (isRecent) {
+            return state;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading schedule state from localStorage:', error);
+    }
+    return null;
+  };
+
+  const clearScheduleStateFromLocalStorage = () => {
+    try {
+      const userId = user?.id;
+      if (userId) {
+        localStorage.removeItem(`doctorScheduleState_${userId}`);
+      }
+    } catch (error) {
+      console.error('Error clearing schedule state from localStorage:', error);
+    }
   };
 
   // Function to handle going offline
@@ -201,23 +376,40 @@ const DoctorDashboard = () => {
       }
     };
     
-    setIsOnline(false);
-    setDoctorAvailability(newAvailability);
-    setScheduleExpired(true);
-    setShowScheduleExpiredModal(false);
-    
-    // Save to database
-    await saveAvailabilityToDatabase(newAvailability);
-    
-    // Show confirmation
-    Swal.fire({
-      title: 'Gone Offline',
-      text: 'You are now offline. Patients cannot book new appointments.',
-      icon: 'info',
-      confirmButtonColor: '#6b7280',
-      timer: 2000,
-      showConfirmButton: false
-    });
+    try {
+      // Update local state
+      setIsOnline(false);
+      setDoctorAvailability(newAvailability);
+      // Don't set schedule expired when manually going offline
+      // setScheduleExpired(true); // REMOVED - this was causing the issue
+      setShowScheduleExpiredModal(false);
+      setShowExtensionPrompt(false);
+      
+      // Save to database
+      const saveResult = await saveAvailabilityToDatabase(newAvailability);
+      
+      if (saveResult.success) {
+        // Show confirmation
+        Swal.fire({
+          title: 'Gone Offline',
+          text: 'You are now offline. Patients cannot book new appointments.',
+          icon: 'info',
+          confirmButtonColor: '#6b7280',
+          timer: 2000,
+          showConfirmButton: false
+        });
+      } else {
+        throw new Error('Failed to save to database');
+      }
+    } catch (error) {
+      console.error('Error going offline:', error);
+      Swal.fire({
+        title: 'Offline Status Updated',
+        text: 'You are offline locally but failed to sync with server.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+    }
   };
 
   // Function to save availability to database
@@ -255,54 +447,189 @@ const DoctorDashboard = () => {
     }
   };
 
-  // Enhanced function to handle going online with default times
+  // Enhanced function to handle going online with schedule validation
   const handleGoOnline = async () => {
-    const currentHour = new Date().getHours().toString().padStart(2, '0');
-    const currentMinute = new Date().getMinutes().toString().padStart(2, '0');
-    const currentTime = `${currentHour}:${currentMinute}`;
-    
-    // Set default end time to 8 hours from current time
-    const endHour = (new Date().getHours() + 8) % 24;
-    const defaultEndTime = `${endHour.toString().padStart(2, '0')}:${currentMinute}`;
+    // Check if doctor has set availability and if current time is within scheduled period
+    if (!hasSetAvailability) {
+      Swal.fire({
+        title: 'No Schedule Set',
+        text: 'Please set your availability schedule before going online.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+      return;
+    }
+
+    if (!isWithinScheduledTime()) {
+      const { startTime, endTime } = doctorAvailability.dailySchedule;
+      Swal.fire({
+        title: 'Outside Scheduled Hours',
+        text: `You can only go online during your scheduled hours (${startTime} - ${endTime}). Please wait for your scheduled time or update your availability.`,
+        icon: 'info',
+        confirmButtonColor: '#3b82f6'
+      });
+      return;
+    }
 
     const newAvailability = {
       ...doctorAvailability,
       isAvailable: true,
       dailySchedule: {
         ...doctorAvailability.dailySchedule,
-        isActive: true,
-        startTime: currentTime,
-        endTime: defaultEndTime
+        isActive: true
       }
     };
 
-    // Validate before setting
-    if (validateAvailabilitySettings(newAvailability)) {
-      setDoctorAvailability(newAvailability);
-      setIsOnline(true);
+    // Set online status
+    setDoctorAvailability(newAvailability);
+    setIsOnline(true);
+    
+    // Save to database
+    const saveResult = await saveAvailabilityToDatabase(newAvailability);
+    
+    if (saveResult.success) {
+      const { startTime, endTime } = doctorAvailability.dailySchedule;
+      Swal.fire({
+        title: 'Online!',
+        text: `You are now online during your scheduled hours (${startTime} - ${endTime})`,
+        icon: 'success',
+        confirmButtonColor: '#10b981',
+        timer: 3000,
+        showConfirmButton: false
+      });
+    } else {
+      // Show error but keep the UI updated
+      Swal.fire({
+        title: 'Warning',
+        text: 'You are online locally, but failed to sync with server. Please check your connection.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+    }
+  };
+
+  // Handle fee amount input change and clear validation errors
+  const handleFeeAmountChange = (e) => {
+    setFeeAmount(e.target.value);
+    setFeeValidationError(''); // Clear validation error when user starts typing
+  };
+
+  // Handle opening consultation fee modal
+  const handleOpenConsultationFeeModal = () => {
+    setFeeValidationError(''); // Clear any previous validation errors
+    
+    // If updating existing fee, pre-fill with current amount
+    if (consultationFee.amount && consultationFee.status === 'approved') {
+      setFeeAmount(consultationFee.amount.toString());
+    } else {
+      setFeeAmount('');
+    }
+    
+    setShowConsultationFeeModal(true);
+  };
+
+  // Consultation fee handlers
+  const handleSubmitConsultationFee = async () => {
+    // Clear previous validation errors
+    setFeeValidationError('');
+    
+    // Validate empty or zero amount
+    if (!feeAmount || parseFloat(feeAmount) <= 0) {
+      setFeeValidationError('Please enter a valid consultation fee amount greater than zero.');
+      return;
+    }
+
+    // Validate same amount (if current fee exists and approved)
+    if (consultationFee.amount && consultationFee.status === 'approved' && parseFloat(feeAmount) === consultationFee.amount) {
+      setFeeValidationError('Please enter a different amount. You cannot submit the same consultation fee that is already approved.');
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
       
-      // Save to database
-      const saveResult = await saveAvailabilityToDatabase(newAvailability);
-      
-      if (saveResult.success) {
+      if (!token) {
         Swal.fire({
-          title: 'Online!',
-          text: `You are now online from ${currentTime} to ${defaultEndTime}`,
+          title: 'Authentication Error',
+          text: 'Please log in again to submit your consultation fee.',
+          icon: 'error',
+          confirmButtonColor: '#ef4444'
+        });
+        return;
+      }
+
+      console.log('Submitting consultation fee:', {
+        amount: parseFloat(feeAmount),
+        currency: currency
+      });
+
+      const response = await fetch('http://localhost:3001/api/approvals/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          type: 'consultation_fee',
+          requestData: {
+            amount: parseFloat(feeAmount),
+            currency: currency
+          }
+        })
+      });
+
+      console.log('Response status:', response.status);
+      
+      const responseData = await response.json();
+      console.log('Response data:', responseData);
+
+      if (response.ok) {
+        setConsultationFee({
+          amount: parseFloat(feeAmount),
+          status: 'pending',
+          rejectionReason: null
+        });
+        
+        setShowConsultationFeeModal(false);
+        setFeeAmount('');
+        
+        Swal.fire({
+          title: 'Fee Submitted!',
+          text: 'Your consultation fee has been submitted for admin approval. You will be notified once it\'s reviewed.',
           icon: 'success',
           confirmButtonColor: '#10b981',
-          timer: 3000,
-          showConfirmButton: false
+          timer: 4000
         });
       } else {
-        // Show error but keep the UI updated
-        Swal.fire({
-          title: 'Warning',
-          text: 'You are online locally, but failed to sync with server. Please check your connection.',
-          icon: 'warning',
-          confirmButtonColor: '#f59e0b'
-        });
+        throw new Error(responseData.message || `Server error: ${response.status}`);
       }
+    } catch (error) {
+      console.error('Error submitting consultation fee:', error);
+      
+      let errorMessage = 'Failed to submit consultation fee. Please try again.';
+      
+      if (error.message.includes('fetch')) {
+        errorMessage = 'Unable to connect to server. Please check if the server is running.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      Swal.fire({
+        title: 'Submission Failed',
+        text: errorMessage,
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
     }
+  };
+
+  const handleSkipConsultationFee = () => {
+    setShowConsultationFeeModal(false);
+    setConsultationFee({
+      amount: null,
+      status: 'not_set',
+      rejectionReason: null
+    });
   };
 
   // Check authentication and role on component mount
@@ -382,10 +709,163 @@ const DoctorDashboard = () => {
                         setIsOnline(availability.isAvailable && availability.dailySchedule.isActive);
                       }
                     }
+                    
+                    // Restore schedule state from localStorage after user data is loaded
+                    setTimeout(() => {
+                      const savedState = loadScheduleStateFromLocalStorage();
+                      if (savedState) {
+                        setScheduleExpired(savedState.scheduleExpired);
+                        setScheduleJustStarted(savedState.scheduleJustStarted);
+                        setWasWithinSchedule(savedState.wasWithinSchedule || false);
+                        // hasSetAvailability should come from backend, not localStorage
+                      }
+                    }, 100); // Small delay to ensure user state is set
                   }
                 }
               } catch (availabilityError) {
                 console.error('Error loading availability:', availabilityError);
+              }
+
+              // Load doctor's consultation fee
+              try {
+                const feeResponse = await fetch('http://localhost:3001/api/users/doctor/consultation-fee', {
+                  headers: {
+                    'Authorization': `Bearer ${token}`
+                  }
+                });
+
+                if (feeResponse.ok) {
+                  const feeData = await feeResponse.json();
+                  console.log('Fee data received:', feeData.data);
+                  
+                  // Check if consultation fee is set in User collection
+                  const userConsultationFee = feeData.data.consultationFee;
+                  const hasValidFee = userConsultationFee && userConsultationFee > 0;
+                  
+                  console.log('User consultation fee from DB:', userConsultationFee);
+                  console.log('Has valid fee:', hasValidFee);
+                  
+                  if (hasValidFee) {
+                    // Consultation fee is set and > 0 in User collection
+                    setConsultationFee({
+                      amount: userConsultationFee,
+                      status: 'approved', // If it's in User collection, it's approved
+                      rejectionReason: null
+                    });
+                    console.log('Consultation fee is set, not showing modal');
+                    // Don't show modal since fee is already set
+                  } else {
+                    // No valid consultation fee set, prompt doctor
+                    console.log('No valid consultation fee set (0 or null), showing modal');
+                    setConsultationFee({
+                      amount: 0,
+                      status: 'not_set',
+                      rejectionReason: null
+                    });
+                    setShowConsultationFeeModal(true);
+                  }
+                } else {
+                  // API error, assume no fee is set and prompt doctor
+                  console.log('API error loading consultation fee, assuming not set');
+                  setConsultationFee({
+                    amount: 0,
+                    status: 'not_set', 
+                    rejectionReason: null
+                  });
+                  setShowConsultationFeeModal(true);
+                }
+              } catch (feeError) {
+                console.error('Error loading consultation fee:', feeError);
+                // On error, assume no fee is set and prompt doctor
+                console.log('Fee loading error, assuming not set and showing modal');
+                setConsultationFee({
+                  amount: 0,
+                  status: 'not_set',
+                  rejectionReason: null
+                });
+                setShowConsultationFeeModal(true);
+              }
+            }
+
+            // Check for recent rejected approval requests
+            if (userData.userType === 'doctor') {
+              try {
+                const approvalsResponse = await fetch('http://localhost:3001/api/approvals/my-requests', {
+                  headers: {
+                    'Authorization': `Bearer ${token}`
+                  }
+                });
+
+                if (approvalsResponse.ok) {
+                  const approvalsData = await approvalsResponse.json();
+                  console.log('Doctor approvals data:', approvalsData.data);
+
+                  // Find the most recent consultation fee request (any status)
+                  const consultationFeeRequests = approvalsData.data.approvals
+                    ?.filter(approval => approval.type === 'consultation_fee')
+                    ?.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+
+                  if (consultationFeeRequests && consultationFeeRequests.length > 0) {
+                    const latestRequest = consultationFeeRequests[0];
+                    console.log('Latest consultation fee request:', latestRequest);
+
+                    // Update consultation fee status based on latest request
+                    if (latestRequest.status === 'pending') {
+                      setConsultationFee(prev => ({
+                        ...prev,
+                        status: 'pending'
+                      }));
+                    } else if (latestRequest.status === 'rejected') {
+                      setConsultationFee(prev => ({
+                        ...prev,
+                        status: 'rejected',
+                        rejectionReason: latestRequest.reason
+                      }));
+
+                      // Check if this rejection is recent and should be shown
+                      const rejectionTime = new Date(latestRequest.processedAt);
+                      const now = new Date();
+                      const timeDiff = now - rejectionTime;
+                      const hoursAgo = timeDiff / (1000 * 60 * 60);
+
+                      // Show if it's within 24 hours and hasn't been acknowledged
+                      if (hoursAgo <= 24) {
+                        const rejectionKey = `rejection_shown_${latestRequest._id}`;
+                        const hasBeenShown = localStorage.getItem(rejectionKey);
+
+                        if (!hasBeenShown) {
+                          setRejectionDetails(latestRequest);
+                          setTimeout(() => {
+                            setShowRejectionModal(true);
+                          }, 1000); // Show after a brief delay
+                        }
+                      }
+                    } else if (latestRequest.status === 'approved') {
+                      // Check if this approval is recent and should be shown
+                      const approvalTime = new Date(latestRequest.processedAt);
+                      const now = new Date();
+                      const timeDiff = now - approvalTime;
+                      const hoursAgo = timeDiff / (1000 * 60 * 60);
+
+                      // Show if it's within 24 hours and hasn't been acknowledged
+                      if (hoursAgo <= 24) {
+                        const approvalKey = `approval_shown_${latestRequest._id}`;
+                        const hasBeenShown = localStorage.getItem(approvalKey);
+
+                        if (!hasBeenShown) {
+                          setApprovalDetails(latestRequest);
+                          setTimeout(() => {
+                            setShowApprovalModal(true);
+                          }, 1500); // Show after rejection modal if both exist
+                        }
+                      }
+                    }
+                  }
+                } else {
+                  console.log('Could not load approval requests');
+                }
+              } catch (approvalError) {
+                console.error('Error loading approval requests:', approvalError);
               }
             }
           } else {
@@ -444,16 +924,98 @@ const DoctorDashboard = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Monitor schedule expiry
+  // Save schedule state to localStorage whenever it changes
   useEffect(() => {
-    if (hasSetAvailability && isOnline && !scheduleExpired && activeTab !== 'availability') {
+    if (user?.id) {
+      saveScheduleStateToLocalStorage({
+        scheduleExpired,
+        scheduleJustStarted,
+        hasSetAvailability,
+        wasWithinSchedule
+      });
+    }
+  }, [scheduleExpired, scheduleJustStarted, hasSetAvailability, wasWithinSchedule, user?.id]);
+
+  // Monitor schedule expiry and automatic online/offline status
+  useEffect(() => {
+    // Only check if we have a schedule set and not already showing modal
+    if (hasSetAvailability && doctorAvailability.dailySchedule?.endTime && !showScheduleExpiredModal) {
       const isExpired = checkScheduleExpiry();
-      if (isExpired && !showExtensionPrompt && !showScheduleExpiredModal) {
-        setShowExtensionPrompt(true);
-        handleScheduleExtension();
+      const withinSchedule = isWithinScheduledTime();
+      
+      console.log('Schedule monitoring check:', {
+        hasSetAvailability,
+        scheduleExpired,
+        activeTab,
+        isExpired,
+        withinSchedule,
+        isOnline,
+        showExtensionPrompt,
+        showScheduleExpiredModal,
+        currentTime: new Date().toLocaleTimeString(),
+        startTime: doctorAvailability.dailySchedule?.startTime,
+        endTime: doctorAvailability.dailySchedule?.endTime
+      });
+      
+      // Check if schedule just started (either time-based or transition-based)
+      const justStarted = checkScheduleJustStarted();
+      const justEnteredSchedule = !wasWithinSchedule && withinSchedule;
+      
+      if ((justStarted || justEnteredSchedule) && !scheduleJustStarted && !showScheduleStartModal && !isOnline) {
+        console.log('Schedule just started - showing start modal', { justStarted, justEnteredSchedule });
+        setScheduleJustStarted(true);
+        setShowScheduleStartModal(true);
+      }
+      
+      // Reset schedule just started flag when no longer at start time and not within schedule
+      if (!justStarted && !withinSchedule && scheduleJustStarted) {
+        setScheduleJustStarted(false);
+      }
+      
+      // Update previous schedule status for transition detection
+      setWasWithinSchedule(withinSchedule);
+      
+      // Automatically set offline if outside scheduled hours and currently online
+      if (!withinSchedule && isOnline) {
+        console.log('Outside scheduled hours - automatically going offline');
+        setIsOnline(false);
+        
+        // Also update the availability in database
+        const updatedAvailability = {
+          ...doctorAvailability,
+          isAvailable: false
+        };
+        setDoctorAvailability(updatedAvailability);
+        saveAvailabilityToDatabase(updatedAvailability);
+        
+        if (!isExpired) {
+          // Before scheduled time
+          Swal.fire({
+            title: 'Outside Scheduled Hours',
+            text: `You are automatically offline. Your schedule starts at ${doctorAvailability.dailySchedule.startTime}.`,
+            icon: 'info',
+            confirmButtonColor: '#3b82f6'
+          });
+        }
+      }
+      
+      // If schedule just expired and we haven't shown the modal yet
+      if (isExpired && !scheduleExpired) {
+        console.log('Schedule just expired - triggering modal and going offline');
+        setScheduleExpired(true);
+        setShowScheduleExpiredModal(true);
+        
+        // Automatically go offline when schedule expires
+        setIsOnline(false);
+        const updatedAvailability = {
+          ...doctorAvailability,
+          isAvailable: false
+        };
+        setDoctorAvailability(updatedAvailability);
+        saveAvailabilityToDatabase(updatedAvailability);
       }
     }
-  }, [currentTime, hasSetAvailability, isOnline, scheduleExpired, showExtensionPrompt, activeTab, showScheduleExpiredModal]);
+  }, [currentTime, hasSetAvailability, doctorAvailability.dailySchedule?.endTime, doctorAvailability.dailySchedule?.startTime, showScheduleExpiredModal, scheduleExpired, isOnline, scheduleJustStarted, showScheduleStartModal, wasWithinSchedule]);
 
   // Handle clicks outside dropdowns
   useEffect(() => {
@@ -536,6 +1098,8 @@ const DoctorDashboard = () => {
       }
     }).then((result) => {
       if (result.isConfirmed) {
+        // Clear schedule state before logging out
+        clearScheduleStateFromLocalStorage();
         handleLogout(navigate);
       }
     });
@@ -546,7 +1110,7 @@ const DoctorDashboard = () => {
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-blue-600' },
     { id: 'appointments', label: 'Appointments', icon: CalendarDaysIcon, gradient: 'from-green-500 to-green-600' },
     { id: 'patients', label: 'Patients', icon: UsersIcon, gradient: 'from-purple-500 to-purple-600' },
-    { id: 'availability', label: 'Availability', icon: ClockIcon, gradient: 'from-emerald-500 to-emerald-600' },
+    // { id: 'availability', label: 'Availability', icon: ClockIcon, gradient: 'from-emerald-500 to-emerald-600' },
     { id: 'prescriptions', label: 'E-Prescribe', icon: BeakerIcon, gradient: 'from-pink-500 to-rose-600' },
     { id: 'records', label: 'Records', icon: DocumentTextIcon, gradient: 'from-indigo-500 to-indigo-600' },
     { id: 'chat', label: 'Chat', icon: ChatBubbleLeftIcon, gradient: 'from-cyan-500 to-cyan-600' }
@@ -679,53 +1243,13 @@ const DoctorDashboard = () => {
                         </span>
                       </div>
                       <Button 
-                        onClick={() => {
+                        onClick={async () => {
                           if (!isOnline) {
-                            // Check if schedule has expired
-                            if (scheduleExpired || checkScheduleExpiry()) {
-                              Swal.fire({
-                                title: 'Schedule Expired',
-                                text: 'Your previous schedule has expired. Please set a new schedule before going online.',
-                                icon: 'warning',
-                                confirmButtonColor: '#f59e0b',
-                                confirmButtonText: 'Set New Schedule'
-                              }).then(() => {
-                                setActiveTab('availability');
-                              });
-                              return;
-                            }
-
-                            // Going online - set both states
-                            const newAvailability = {
-                              ...doctorAvailability,
-                              isAvailable: true,
-                              dailySchedule: {
-                                ...doctorAvailability.dailySchedule,
-                                isActive: true
-                              }
-                            };
-                            
-                            setIsOnline(true);
-                            setDoctorAvailability(newAvailability);
-                            
-                            // Save to database
-                            saveAvailabilityToDatabase(newAvailability);
+                            // Use the same enhanced validation as floating button
+                            handleGoOnline();
                           } else {
                             // Going offline
-                            const newAvailability = {
-                              ...doctorAvailability,
-                              isAvailable: false,
-                              dailySchedule: {
-                                ...doctorAvailability.dailySchedule,
-                                isActive: false
-                              }
-                            };
-                            
-                            setIsOnline(false);
-                            setDoctorAvailability(newAvailability);
-                            
-                            // Save to database
-                            saveAvailabilityToDatabase(newAvailability);
+                            handleGoOffline();
                           }
                         }}
                         className="bg-white/20 hover:bg-white/30 text-white border-white/20 text-sm"
@@ -787,6 +1311,23 @@ const DoctorDashboard = () => {
                               )}
                             </span>
                           </div>
+                          <div className="flex items-center space-x-2 mt-1">
+                            <div className={`w-2 h-2 rounded-full ${
+                              isWithinScheduledTime() 
+                                ? 'bg-blue-400 animate-pulse' 
+                                : 'bg-gray-400'
+                            }`}></div>
+                            <span className={`text-xs ${
+                              isWithinScheduledTime() 
+                                ? 'text-blue-200' 
+                                : 'text-gray-400'
+                            }`}>
+                              {isWithinScheduledTime() 
+                                ? 'Can Go Online Now' 
+                                : 'Outside Schedule Hours'
+                              }
+                            </span>
+                          </div>
                         </div>
                       ) : (
                         <div className="text-red-200 text-sm">
@@ -802,6 +1343,8 @@ const DoctorDashboard = () => {
               <div className="absolute -right-4 -top-4 w-16 h-16 sm:w-24 sm:h-24 lg:w-32 lg:h-32 bg-white/10 rounded-full blur-xl" />
               <div className="absolute -left-4 -bottom-4 w-12 h-12 sm:w-16 sm:h-16 lg:w-24 lg:h-24 bg-white/5 rounded-full blur-2xl" />
             </div>
+
+            
 
             {/* Stats Cards - Enhanced Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
@@ -847,13 +1390,48 @@ const DoctorDashboard = () => {
               <Card className="bg-gradient-to-br from-orange-500 to-orange-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 group">
                 <div className="p-4 sm:p-6 text-center">
                   <div className="flex items-center justify-center mb-3">
-                    <ChatBubbleLeftIcon className="w-8 h-8 sm:w-10 sm:h-10 group-hover:scale-110 transition-transform duration-200" />
+                    <ChartBarIcon className="w-8 h-8 sm:w-10 sm:h-10 group-hover:scale-110 transition-transform duration-200" />
                   </div>
-                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">12</div>
-                  <div className="text-orange-100 text-xs sm:text-sm">New Messages</div>
+                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">
+                    {consultationFee.amount && consultationFee.amount > 0
+                      ? `₹${consultationFee.amount}` 
+                      : '--'
+                    }
+                  </div>
+                  <div className="text-orange-100 text-xs sm:text-sm">Consultation Fee</div>
                   <div className="mt-2 sm:mt-3 text-xs bg-white/20 rounded-full px-2 sm:px-3 py-1 inline-block">
-                    Unread
+                    {consultationFee.status === 'not_set' ? 'Not Set' :
+                     consultationFee.status === 'pending' ? 'Pending Approval' :
+                     consultationFee.status === 'approved' ? 'Active' :
+                     consultationFee.status === 'rejected' ? 'Rejected' : 'Unknown'}
                   </div>
+                  {consultationFee.status === 'not_set' && (
+                    <Button
+                      onClick={handleOpenConsultationFeeModal}
+                      className="mt-2 bg-white/20 hover:bg-white/30 text-white border-white/20 text-xs px-3 py-1"
+                      size="sm"
+                    >
+                      Set Fee
+                    </Button>
+                  )}
+                  {consultationFee.amount > 0 && (
+                    <Button
+                      onClick={handleOpenConsultationFeeModal}
+                      className="mt-2 bg-white/20 hover:bg-white/30 text-white border-white/20 text-xs px-3 py-1"
+                      size="sm"
+                    >
+                      Update Fee
+                    </Button>
+                  )}
+                  {consultationFee.status === 'rejected' && (
+                    <Button
+                      onClick={handleOpenConsultationFeeModal}
+                      className="mt-2 bg-white/20 hover:bg-white/30 text-white border-white/20 text-xs px-3 py-1"
+                      size="sm"
+                    >
+                      Resubmit
+                    </Button>
+                  )}
                 </div>
               </Card>
             </div>
@@ -2161,8 +2739,8 @@ const DoctorDashboard = () => {
       {/* Mobile Bottom Navigation - Only visible on small screens */}
       {isMobile && (
         <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-lg z-40 lg:hidden">
-          <div className="grid grid-cols-4 gap-1 px-2 py-2">
-            {sidebarItems.slice(0, 4).map((item) => {
+          <div className="grid grid-cols-6 gap-1 px-2 py-2">
+            {sidebarItems.slice(0, 6).map((item) => {
               const IconComponent = item.icon;
               const isActive = activeTab === item.id;
               
@@ -2199,116 +2777,52 @@ const DoctorDashboard = () => {
       {/* Floating Availability Toggle Button */}
       <button
         onClick={async () => {
-          if (!hasSetAvailability) {
-            // If no schedule is set, redirect to availability section
-            setActiveTab('availability');
-            return;
-          }
-
           if (!isOnline) {
-            // Check if schedule has expired
-            if (scheduleExpired || checkScheduleExpiry()) {
-              Swal.fire({
-                title: 'Schedule Expired',
-                text: 'Your previous schedule has expired. Please set a new schedule before going online.',
-                icon: 'warning',
-                confirmButtonColor: '#f59e0b',
-                confirmButtonText: 'Set New Schedule'
-              }).then(() => {
-                setActiveTab('availability');
-              });
-              return;
-            }
-
-            // Going online - set both states
-            const newAvailability = {
-              ...doctorAvailability,
-              isAvailable: true,
-              dailySchedule: {
-                ...doctorAvailability.dailySchedule,
-                isActive: true
-              }
-            };
-            
-            setIsOnline(true);
-            setDoctorAvailability(newAvailability);
-            
-            // Save to database
-            const saveResult = await saveAvailabilityToDatabase(newAvailability);
-            
-            if (saveResult.success) {
-              Swal.fire({
-                title: 'Online',
-                text: 'You are now online and available for appointments.',
-                icon: 'success',
-                confirmButtonColor: '#10b981',
-                timer: 2000,
-                showConfirmButton: false
-              });
-            } else {
-              Swal.fire({
-                title: 'Warning',
-                text: 'You are online locally, but failed to sync with server.',
-                icon: 'warning',
-                confirmButtonColor: '#f59e0b'
-              });
-            }
+            // Use the enhanced handleGoOnline function which includes schedule validation
+            handleGoOnline();
           } else {
-            // Going offline - set everything to offline/unavailable
-            const newAvailability = {
-              ...doctorAvailability,
-              isAvailable: false,
-              dailySchedule: {
-                ...doctorAvailability.dailySchedule,
-                isActive: false
-              }
-            };
-            
-            setIsOnline(false);
-            setDoctorAvailability(newAvailability);
-            
-            // Save offline status to database
-            const saveResult = await saveAvailabilityToDatabase(newAvailability);
-            
-            if (saveResult.success) {
-              Swal.fire({
-                title: 'Offline',
-                text: 'You are now offline. Patients cannot book new appointments.',
-                icon: 'info',
-                confirmButtonColor: '#6b7280',
-                timer: 2000,
-                showConfirmButton: false
-              });
-            } else {
-              Swal.fire({
-                title: 'Warning',
-                text: 'You are offline locally, but failed to sync with server.',
-                icon: 'warning',
-                confirmButtonColor: '#f59e0b'
-              });
-            }
+            // Going offline
+            handleGoOffline();
           }
         }}
         className={`
           fixed w-14 h-14 sm:w-16 sm:h-16 ${
             isOnline 
               ? 'bg-gradient-to-r from-green-500 to-emerald-500' 
-              : 'bg-gradient-to-r from-red-500 to-red-600'
+              : hasSetAvailability && isWithinScheduledTime()
+                ? 'bg-gradient-to-r from-blue-500 to-blue-600 animate-pulse'
+                : hasSetAvailability 
+                  ? 'bg-gradient-to-r from-gray-400 to-gray-500'
+                  : 'bg-gradient-to-r from-red-500 to-red-600'
           } text-white rounded-full shadow-2xl hover:shadow-3xl transition-all duration-300 
           flex items-center justify-center transform hover:scale-110 
           ${isMobile ? 'bottom-20 right-4' : 'bottom-8 right-8'}
-          z-50
+          z-50 ${
+            !isOnline && hasSetAvailability && !isWithinScheduledTime() 
+              ? 'opacity-60 cursor-not-allowed' 
+              : ''
+          }
         `}
-        title={isOnline ? 'Go Offline' : 'Go Online'}
+        title={
+          isOnline 
+            ? 'Go Offline' 
+            : hasSetAvailability 
+              ? isWithinScheduledTime()
+                ? 'Go Online (Schedule Active)'
+                : `Schedule: ${doctorAvailability.dailySchedule?.startTime} - ${doctorAvailability.dailySchedule?.endTime}`
+              : 'Set Schedule First'
+        }
       >
         <PowerIcon className={`w-6 h-6 sm:w-8 sm:h-8 ${isOnline ? 'text-white' : 'text-white'}`} />
       </button>
 
       
       {/* Schedule Expired Modal */}
+      {console.log('Rendering modal check:', showScheduleExpiredModal)}
       {showScheduleExpiredModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 transform animate-in fade-in zoom-in duration-500">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 transform animate-in fade-in zoom-in duration-500"
+               onClick={(e) => e.stopPropagation()}>
             {/* Header with animated icon */}
             <div className="text-center mb-8">
               <div className="relative w-20 h-20 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
@@ -2359,6 +2873,178 @@ const DoctorDashboard = () => {
         </div>
       )}
       
+      {/* Schedule Start Modal */}
+      {showScheduleStartModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 transform animate-in fade-in zoom-in duration-500"
+               onClick={(e) => e.stopPropagation()}>
+            {/* Header with animated icon */}
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 bg-gradient-to-r from-green-500 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4 animate-bounce">
+                <ClockIcon className="w-10 h-10 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Schedule Started! 🎉</h2>
+              <p className="text-gray-600">
+                Your scheduled availability period has begun. You can now go online to start accepting appointments.
+              </p>
+            </div>
+
+            {/* Schedule info */}
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-4 mb-6 border border-green-200">
+              <div className="text-center">
+                <p className="text-sm text-gray-600 mb-1">Today's Schedule</p>
+                <p className="text-lg font-bold text-gray-900">
+                  {doctorAvailability.dailySchedule?.startTime} - {doctorAvailability.dailySchedule?.endTime}
+                </p>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="space-y-3">
+              <Button
+                onClick={async () => {
+                  setShowScheduleStartModal(false);
+                  // Go online immediately
+                  handleGoOnline();
+                }}
+                className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white border-0 py-4 text-lg font-semibold transform hover:scale-[1.02] transition-all duration-300"
+              >
+                <div className="flex items-center justify-center">
+                  <PowerIcon className="w-5 h-5 mr-3" />
+                  <span>Go Online Now</span>
+                </div>
+              </Button>
+              
+              <Button
+                onClick={() => setShowScheduleStartModal(false)}
+                variant="outline"
+                className="w-full border-2 border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-all duration-300 transform hover:scale-[1.02] py-4 text-lg font-semibold"
+              >
+                <span>Dismiss</span>
+              </Button>
+            </div>
+            
+            {/* Info note */}
+            <div className="mt-6 p-4 bg-blue-50 rounded-2xl border border-blue-200">
+              <p className="text-sm text-blue-700 text-center font-medium">
+                ✨ Your patients can now see you're available for appointments
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Consultation Fee Modal */}
+      <Modal 
+        isOpen={showConsultationFeeModal}
+        onClose={() => setShowConsultationFeeModal(false)}
+        title={consultationFee.amount > 0 ? "Update Consultation Fee" : "Set Consultation Fee"}
+        size="md"
+      >
+        <div className="space-y-6">
+          <div className="text-center">
+            <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-4">
+              <ChartBarIcon className="w-6 h-6 text-blue-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              {consultationFee.amount > 0 ? 'Update Your Consultation Fee' : 'Set Your Consultation Fee'}
+            </h3>
+            <p className="text-sm text-gray-600">
+              {consultationFee.amount > 0
+                ? 'Update your consultation fee per patient. Changes will be submitted to the admin for approval.'
+                : 'Please set your consultation fee per patient. This will be submitted to the admin for approval.'
+              }
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Currency
+              </label>
+              <div className="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 flex items-center">
+                <span className="text-gray-700 font-medium">INR (₹)</span>
+                <span className="ml-2 text-sm text-gray-500">- Indian Rupee</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Consultation Fee Amount
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-medium">
+                  ₹
+                </span>
+                <input
+                  type="number"
+                  value={feeAmount}
+                  onChange={handleFeeAmountChange}
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                  className="w-full pl-8 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Enter the amount you charge per consultation
+              </p>
+            </div>
+              
+            {feeValidationError && (
+              <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-800">
+                  {feeValidationError}
+                </p>
+              </div>
+            )}
+
+            {consultationFee.status === 'rejected' && consultationFee.rejectionReason && (
+              <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm font-medium text-red-800 mb-1">
+                  Previous submission was rejected:
+                </p>
+                <p className="text-sm text-red-700">
+                  {consultationFee.rejectionReason}
+                </p>
+              </div>
+            )}
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <ClockIcon className="w-5 h-5 text-yellow-600" />
+                </div>
+                <div className="ml-3">
+                  <h4 className="text-sm font-medium text-yellow-800">
+                    Approval Required
+                  </h4>
+                  <p className="text-sm text-yellow-700 mt-1">
+                    Your consultation fee will be reviewed by admin before being activated. You'll be notified once approved.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex space-x-4">
+            <Button
+              onClick={handleSkipConsultationFee}
+              variant="outline"
+              className="flex-1 border-gray-300 text-gray-700 hover:bg-gray-50"
+            >
+              Skip for Now
+            </Button>
+            <Button
+              onClick={handleSubmitConsultationFee}
+              className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white"
+            >
+              Submit for Approval
+            </Button>
+          </div>
+        </div>
+      </Modal>
+      
       {/* Toast Container */}
       <ToastContainer
         position="top-right"
@@ -2372,6 +3058,160 @@ const DoctorDashboard = () => {
         pauseOnHover
         theme="light"
       />
+
+      {/* Rejection Notification Modal */}
+      <Modal 
+        isOpen={showRejectionModal}
+        onClose={() => {
+          setShowRejectionModal(false);
+          // Mark this rejection as shown so it doesn't appear again
+          if (rejectionDetails) {
+            localStorage.setItem(`rejection_shown_${rejectionDetails._id}`, 'true');
+          }
+        }}
+        title="Consultation Fee Request Rejected"
+        size="md"
+      >
+        <div className="space-y-6">
+          <div className="text-center">
+            <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mb-4">
+              <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Your Consultation Fee Request Was Rejected
+            </h3>
+            <p className="text-sm text-gray-600">
+              The admin has reviewed your consultation fee request and provided feedback for improvement.
+            </p>
+          </div>
+
+          {rejectionDetails && (
+            <div className="space-y-4">
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-gray-900 mb-2">Request Details:</h4>
+                <div className="text-sm text-gray-600 space-y-1">
+                  <p><span className="font-medium">Amount:</span> ₹{rejectionDetails.requestData?.amount}</p>
+                  <p><span className="font-medium">Currency:</span> {rejectionDetails.requestData?.currency}</p>
+                  <p><span className="font-medium">Submitted:</span> {new Date(rejectionDetails.submittedAt).toLocaleDateString()}</p>
+                  <p><span className="font-medium">Processed:</span> {new Date(rejectionDetails.processedAt).toLocaleDateString()}</p>
+                </div>
+              </div>
+
+              {rejectionDetails.reason && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-red-800 mb-2">Admin's Feedback:</h4>
+                  <p className="text-sm text-red-700">{rejectionDetails.reason}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-4">
+            <Button
+              onClick={() => {
+                setShowRejectionModal(false);
+                if (rejectionDetails) {
+                  localStorage.setItem(`rejection_shown_${rejectionDetails._id}`, 'true');
+                }
+                // Open the consultation fee modal to resubmit
+                handleOpenConsultationFeeModal();
+              }}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              Submit New Request
+            </Button>
+            <Button
+              onClick={() => {
+                setShowRejectionModal(false);
+                if (rejectionDetails) {
+                  localStorage.setItem(`rejection_shown_${rejectionDetails._id}`, 'true');
+                }
+              }}
+              variant="outline"
+              className="flex-1"
+            >
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Approval Notification Modal */}
+      <Modal 
+        isOpen={showApprovalModal}
+        onClose={() => {
+          setShowApprovalModal(false);
+          // Mark this approval as shown so it doesn't appear again
+          if (approvalDetails) {
+            localStorage.setItem(`approval_shown_${approvalDetails._id}`, 'true');
+          }
+        }}
+        title="Consultation Fee Request Approved! 🎉"
+        size="md"
+      >
+        <div className="space-y-6">
+          <div className="text-center">
+            <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mb-4">
+              <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Congratulations! Your Request is Approved
+            </h3>
+            <p className="text-sm text-gray-600">
+              Your consultation fee has been approved by the admin and is now active in your profile.
+            </p>
+          </div>
+
+          {approvalDetails && (
+            <div className="space-y-4">
+              <div className="bg-green-50 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-green-800 mb-2">Approved Details:</h4>
+                <div className="text-sm text-green-700 space-y-1">
+                  <p><span className="font-medium">Amount:</span> ₹{approvalDetails.requestData?.amount}</p>
+                  <p><span className="font-medium">Currency:</span> {approvalDetails.requestData?.currency}</p>
+                  <p><span className="font-medium">Submitted:</span> {new Date(approvalDetails.submittedAt).toLocaleDateString()}</p>
+                  <p><span className="font-medium">Approved:</span> {new Date(approvalDetails.processedAt).toLocaleDateString()}</p>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-start">
+                  <div className="flex-shrink-0">
+                    <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h4 className="text-sm font-medium text-blue-800">What's Next?</h4>
+                    <p className="text-sm text-blue-700 mt-1">
+                      Your consultation fee is now visible to patients when they book appointments with you. 
+                      You can update this fee anytime from your dashboard.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-center pt-4">
+            <Button
+              onClick={() => {
+                setShowApprovalModal(false);
+                if (approvalDetails) {
+                  localStorage.setItem(`approval_shown_${approvalDetails._id}`, 'true');
+                }
+              }}
+              className="bg-green-600 hover:bg-green-700 text-white px-8"
+            >
+              Got it, Thanks!
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

@@ -51,6 +51,14 @@ const PatientDashboard = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [availableDoctors, setAvailableDoctors] = useState([]);
+  const [showBookingModal, setShowBookingModal] = useState(false);
+  const [selectedDoctor, setSelectedDoctor] = useState(null);
+  const [appointmentData, setAppointmentData] = useState({
+    date: '',
+    time: '',
+    reason: '',
+    type: 'consultation'
+  });
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
 
@@ -146,7 +154,7 @@ const PatientDashboard = () => {
         const token = localStorage.getItem('token');
         if (!token) return;
 
-        const response = await fetch('http://localhost:3001/api/users/available-doctors', {
+        const response = await fetch('http://localhost:3001/api/users/doctors/available', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -360,6 +368,123 @@ const PatientDashboard = () => {
   // Filter only available doctors
   const getAvailableDoctors = () => {
     return availableDoctors.filter(doctor => doctor.isAvailable);
+  };
+
+  // Function to handle booking appointment
+  const handleBookAppointment = (doctor) => {
+    setSelectedDoctor(doctor);
+    setShowBookingModal(true);
+    // Reset appointment data
+    setAppointmentData({
+      date: '',
+      time: '',
+      reason: '',
+      type: 'consultation'
+    });
+  };
+
+  // Function to submit appointment booking
+  const submitAppointmentBooking = async () => {
+    if (!selectedDoctor || !appointmentData.date || !appointmentData.time || !appointmentData.reason) {
+      Swal.fire({
+        title: 'Missing Information',
+        text: 'Please fill in all required fields.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/api/appointments/book', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          doctorId: selectedDoctor.id,
+          date: appointmentData.date,
+          time: appointmentData.time,
+          reason: appointmentData.reason,
+          type: appointmentData.type
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setShowBookingModal(false);
+        Swal.fire({
+          title: 'Appointment Booked!',
+          text: `Your appointment with ${selectedDoctor.name} has been scheduled for ${appointmentData.date} at ${appointmentData.time}.`,
+          icon: 'success',
+          confirmButtonColor: '#10b981'
+        });
+        
+        // Refresh available doctors or appointments list
+        loadAvailableDoctors();
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to book appointment');
+      }
+    } catch (error) {
+      console.error('Error booking appointment:', error);
+      Swal.fire({
+        title: 'Booking Failed',
+        text: error.message || 'Failed to book appointment. Please try again.',
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
+    }
+  };
+
+  const generateTimeSlots = (schedule) => {
+    if (!schedule || !schedule.startTime || !schedule.endTime) {
+      return [];
+    }
+
+    const slots = [];
+    const startTime = schedule.startTime; // e.g., "09:00"
+    const endTime = schedule.endTime; // e.g., "17:00"
+    const breakStart = schedule.breakStart || "12:00";
+    const breakEnd = schedule.breakEnd || "13:00";
+
+    // Convert time string to minutes
+    const timeToMinutes = (time) => {
+      const [hours, minutes] = time.split(':').map(Number);
+      return hours * 60 + minutes;
+    };
+
+    // Convert minutes to time string
+    const minutesToTime = (minutes) => {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+    };
+
+    const startMinutes = timeToMinutes(startTime);
+    const endMinutes = timeToMinutes(endTime);
+    const breakStartMinutes = timeToMinutes(breakStart);
+    const breakEndMinutes = timeToMinutes(breakEnd);
+
+    // Generate 30-minute slots
+    for (let time = startMinutes; time < endMinutes; time += 30) {
+      // Skip break time
+      if (time >= breakStartMinutes && time < breakEndMinutes) {
+        continue;
+      }
+
+      const timeString = minutesToTime(time);
+      const endTimeString = minutesToTime(time + 30);
+      
+      slots.push({
+        value: timeString,
+        label: `${timeString} - ${endTimeString}`
+      });
+    }
+
+    return slots;
   };
 
   const sidebarItems = [
@@ -619,7 +744,23 @@ const PatientDashboard = () => {
                 <CalendarDaysIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-blue-600" />
                 Appointments
               </h2>
-              <Button className="w-full sm:w-auto bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105">
+              <Button 
+                className="w-full sm:w-auto bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+                onClick={() => {
+                  // Show available doctors first or open booking with first available doctor
+                  const availableDocs = getAvailableDoctors();
+                  if (availableDocs.length > 0) {
+                    handleBookAppointment(availableDocs[0]);
+                  } else {
+                    Swal.fire({
+                      title: 'No Doctors Available',
+                      text: 'No doctors are currently available. Please check back later.',
+                      icon: 'info',
+                      confirmButtonColor: '#3b82f6'
+                    });
+                  }
+                }}
+              >
                 <PlusIcon className="w-4 h-4 mr-2" />
                 Book New Appointment
               </Button>
@@ -673,6 +814,7 @@ const PatientDashboard = () => {
                               <Button 
                                 size="sm" 
                                 className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-md hover:shadow-lg transition-all duration-300"
+                                onClick={() => handleBookAppointment(doctor)}
                               >
                                 <PhoneIcon className="w-4 h-4 mr-1" />
                                 Book Now
@@ -1440,6 +1582,114 @@ const PatientDashboard = () => {
       >
         <ChatBubbleLeftIcon className="w-6 h-6 sm:w-8 sm:h-8" />
       </button>
+
+      {/* Appointment Booking Modal */}
+      {showBookingModal && selectedDoctor && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 transform animate-in fade-in zoom-in duration-300">
+            {/* Header */}
+            <div className="text-center mb-6">
+              <div className={`w-16 h-16 bg-gradient-to-r ${selectedDoctor.color} rounded-full flex items-center justify-center mx-auto mb-4`}>
+                <UserIcon className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Book Appointment</h3>
+              <p className="text-gray-600">Schedule your visit with {selectedDoctor.name}</p>
+              <p className="text-sm text-gray-500">{selectedDoctor.specialty}</p>
+            </div>
+            
+            {/* Form */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Appointment Date</label>
+                <input
+                  type="date"
+                  value={appointmentData.date}
+                  onChange={(e) => setAppointmentData({...appointmentData, date: e.target.value})}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Preferred Time</label>
+                <select
+                  value={appointmentData.time}
+                  onChange={(e) => setAppointmentData({...appointmentData, time: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">Select time</option>
+                  {selectedDoctor && selectedDoctor.availability && selectedDoctor.availability.dailySchedule 
+                    ? generateTimeSlots(selectedDoctor.availability.dailySchedule).map((slot) => (
+                        <option key={slot.value} value={slot.value}>
+                          {slot.label}
+                        </option>
+                      ))
+                    : (
+                      // Fallback options if no schedule data available
+                      <>
+                        <option value="09:00">09:00 - 09:30 AM</option>
+                        <option value="09:30">09:30 - 10:00 AM</option>
+                        <option value="10:00">10:00 - 10:30 AM</option>
+                        <option value="10:30">10:30 - 11:00 AM</option>
+                        <option value="11:00">11:00 - 11:30 AM</option>
+                        <option value="11:30">11:30 - 12:00 PM</option>
+                        <option value="14:00">02:00 - 02:30 PM</option>
+                        <option value="14:30">02:30 - 03:00 PM</option>
+                        <option value="15:00">03:00 - 03:30 PM</option>
+                        <option value="15:30">03:30 - 04:00 PM</option>
+                        <option value="16:00">04:00 - 04:30 PM</option>
+                        <option value="16:30">04:30 - 05:00 PM</option>
+                      </>
+                    )
+                  }
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Appointment Type</label>
+                <select
+                  value={appointmentData.type}
+                  onChange={(e) => setAppointmentData({...appointmentData, type: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="consultation">General Consultation</option>
+                  <option value="follow-up">Follow-up Visit</option>
+                  <option value="checkup">Regular Checkup</option>
+                  <option value="emergency">Emergency</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Reason for Visit</label>
+                <textarea
+                  value={appointmentData.reason}
+                  onChange={(e) => setAppointmentData({...appointmentData, reason: e.target.value})}
+                  placeholder="Please describe your symptoms or reason for the appointment..."
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                />
+              </div>
+            </div>
+            
+            {/* Buttons */}
+            <div className="flex space-x-3 mt-6">
+              <Button
+                onClick={() => setShowBookingModal(false)}
+                variant="outline"
+                className="flex-1 border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={submitAppointmentBooking}
+                className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
+              >
+                Book Appointment
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Toast Container */}
       <ToastContainer

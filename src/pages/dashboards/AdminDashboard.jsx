@@ -42,7 +42,9 @@ import {
   PowerIcon,
   XCircleIcon,
   ArrowPathIcon,
-  BoltIcon
+  BoltIcon,
+  ClipboardDocumentListIcon,
+  ExclamationCircleIcon
 } from '@heroicons/react/24/outline';
 
 const AdminDashboard = () => {
@@ -80,6 +82,12 @@ const AdminDashboard = () => {
   const [filterActiveStatus, setFilterActiveStatus] = useState('');
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
+
+  // Approvals state
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [realApprovals, setRealApprovals] = useState([]);
+  const [approvalsLoading, setApprovalsLoading] = useState(false);
+  const [approvalFilter, setApprovalFilter] = useState('all');
 
   // Mock data
   const notifications = [
@@ -135,9 +143,9 @@ const AdminDashboard = () => {
   const sidebarItems = [
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-purple-600' },
     { id: 'users', label: 'Users', icon: UsersIcon, gradient: 'from-green-500 to-teal-600' },
-    { id: 'doctors', label: 'Doctors', icon: UserPlusIcon, gradient: 'from-purple-500 to-pink-600' },
+    { id: 'verification', label: 'Verification', icon: ShieldCheckIcon, gradient: 'from-purple-500 to-pink-600' },
     { id: 'appointments', label: 'Appointments', icon: CalendarDaysIcon, gradient: 'from-orange-500 to-red-600' },
-    { id: 'departments', label: 'Departments', icon: BuildingOfficeIcon, gradient: 'from-indigo-500 to-blue-600' },
+    { id: 'approvals', label: 'Approvals', icon: DocumentCheckIcon, gradient: 'from-indigo-500 to-blue-600' },
     { id: 'reports', label: 'Reports', icon: DocumentChartBarIcon, gradient: 'from-teal-500 to-cyan-600' }
   ];
 
@@ -233,6 +241,8 @@ const AdminDashboard = () => {
     if (activeTab === 'users') {
       fetchAllUsers();
       fetchUserStats();
+    } else if (activeTab === 'approvals') {
+      fetchApprovals();
     }
   }, [activeTab, debouncedSearchTerm, filterUserType, filterVerificationStatus, filterActiveStatus]);
 
@@ -274,6 +284,302 @@ const AdminDashboard = () => {
     }).then((result) => {
       if (result.isConfirmed) {
         navigate('/auth/signin');
+      }
+    });
+  };
+
+  // Fetch approvals from API
+  const fetchApprovals = async () => {
+    try {
+      setApprovalsLoading(true);
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch('http://localhost:3001/api/approvals/all?status=pending', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRealApprovals(data.data.approvals);
+        
+        // Transform real approvals to match the display format
+        const transformedApprovals = data.data.approvals.map(approval => ({
+          id: approval._id,
+          type: approval.type === 'consultation_fee' ? 'Consultation Fee' : 
+                approval.type === 'profile_verification' ? 'Doctor Application' :
+                approval.type === 'schedule_change' ? 'Schedule Change' : 'Other',
+          title: `${approval.doctor?.firstName || 'Doctor'} ${approval.doctor?.lastName || ''} - ${
+            approval.type === 'consultation_fee' ? 'Fee Approval' :
+            approval.type === 'profile_verification' ? approval.doctor?.specialization || 'Doctor' :
+            'Request'
+          }`,
+          description: approval.type === 'consultation_fee' 
+            ? `Consultation fee request: ${approval.requestData.currency === 'USD' ? '$' : 
+               approval.requestData.currency === 'EUR' ? '€' : 
+               approval.requestData.currency === 'GBP' ? '£' : 
+               approval.requestData.currency === 'INR' ? '₹' : '$'}${approval.requestData.amount} per session`
+            : `Pending ${approval.type.replace('_', ' ')} approval`,
+          time: new Date(approval.submittedAt).toLocaleDateString(),
+          urgent: false,
+          amount: approval.type === 'consultation_fee' ? approval.requestData.amount : null,
+          currency: approval.type === 'consultation_fee' ? approval.requestData.currency : null,
+          userRole: approval.doctor?.userType || 'doctor',
+          doctorEmail: approval.doctor?.email,
+          originalData: approval
+        }));
+        
+        setPendingApprovals(transformedApprovals);
+      }
+    } catch (error) {
+      console.error('Error fetching approvals:', error);
+    } finally {
+      setApprovalsLoading(false);
+    }
+  };
+
+  // Refresh approvals
+  const handleRefreshApprovals = () => {
+    fetchApprovals();
+  };
+
+  // Approval handlers
+  const handleApproveRequest = async (approvalId) => {
+    try {
+      const approval = pendingApprovals.find(app => app.id === approvalId);
+      
+      const result = await Swal.fire({
+        title: 'Approve Request',
+        text: `Are you sure you want to approve "${approval.title}"?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#10B981',
+        cancelButtonColor: '#6B7280',
+        confirmButtonText: '✅ Approve',
+        cancelButtonText: 'Cancel',
+        backdrop: true,
+        customClass: {
+          popup: 'rounded-xl shadow-2xl',
+          title: 'text-lg font-semibold text-gray-900',
+          content: 'text-gray-600',
+          confirmButton: 'rounded-lg px-6 py-2 font-medium',
+          cancelButton: 'rounded-lg px-6 py-2 font-medium'
+        }
+      });
+
+      if (result.isConfirmed) {
+        // Make API call to approve the request
+        const token = localStorage.getItem('token');
+        
+        console.log('Approving request:', {
+          approvalId,
+          token: token ? 'exists' : 'missing',
+          apiUrl: `http://localhost:3001/api/approvals/${approvalId}/process`
+        });
+
+        const response = await fetch(`http://localhost:3001/api/approvals/${approvalId}/process`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            action: 'approve',
+            reason: 'Approved by admin'
+          })
+        });
+
+        console.log('Response status:', response.status);
+        
+        if (response.ok) {
+          const responseData = await response.json();
+          console.log('Success response:', responseData);
+          
+          // Remove the approved item from the list
+          setPendingApprovals(prev => prev.filter(app => app.id !== approvalId));
+          
+          // Show success message
+          Swal.fire({
+            title: 'Approved!',
+            text: `${approval.title} has been approved successfully.`,
+            icon: 'success',
+            timer: 3000,
+            showConfirmButton: false,
+            backdrop: true,
+            customClass: {
+              popup: 'rounded-xl shadow-2xl',
+              title: 'text-lg font-semibold text-gray-900',
+              content: 'text-gray-600'
+            }
+          });
+        } else {
+          const errorData = await response.json();
+          console.error('Error response:', errorData);
+          throw new Error(`Server error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error approving request:', error);
+      
+      // Show detailed error information
+      const errorMessage = error.message.includes('Server error:') 
+        ? error.message 
+        : `Network/Connection Error: ${error.message}`;
+      
+      Swal.fire({
+        title: 'Error!',
+        html: `
+          <div class="text-left">
+            <p class="mb-2"><strong>Failed to approve the request.</strong></p>
+            <p class="text-sm text-gray-600 mb-2">Error details:</p>
+            <code class="text-xs bg-gray-100 p-2 rounded block">${errorMessage}</code>
+            <p class="text-sm text-gray-600 mt-2">Please check the console for more details and ensure the server is running.</p>
+          </div>
+        `,
+        icon: 'error',
+        confirmButtonColor: '#EF4444',
+        backdrop: true,
+        customClass: {
+          popup: 'rounded-xl shadow-2xl',
+          title: 'text-lg font-semibold text-gray-900',
+          content: 'text-gray-600',
+          confirmButton: 'rounded-lg px-6 py-2 font-medium'
+        }
+      });
+    }
+  };
+
+  const handleRejectRequest = async (approvalId) => {
+    try {
+      const approval = pendingApprovals.find(app => app.id === approvalId);
+      
+      const { value: rejectionReason } = await Swal.fire({
+        title: 'Reject Request',
+        text: `Provide a reason for rejecting "${approval.title}":`,
+        input: 'textarea',
+        inputPlaceholder: 'Enter rejection reason...',
+        inputAttributes: {
+          'aria-label': 'Rejection reason'
+        },
+        showCancelButton: true,
+        confirmButtonColor: '#EF4444',
+        cancelButtonColor: '#6B7280',
+        confirmButtonText: '❌ Reject',
+        cancelButtonText: 'Cancel',
+        inputValidator: (value) => {
+          if (!value) {
+            return 'You need to provide a rejection reason!'
+          }
+        },
+        backdrop: true,
+        customClass: {
+          popup: 'rounded-xl shadow-2xl',
+          title: 'text-lg font-semibold text-gray-900',
+          content: 'text-gray-600',
+          confirmButton: 'rounded-lg px-6 py-2 font-medium',
+          cancelButton: 'rounded-lg px-6 py-2 font-medium'
+        }
+      });
+
+      if (rejectionReason) {
+        // Make API call to reject the request
+        const token = localStorage.getItem('token');
+        
+        console.log('Rejecting request:', {
+          approvalId,
+          reason: rejectionReason,
+          token: token ? 'exists' : 'missing',
+          apiUrl: `http://localhost:3001/api/approvals/${approvalId}/process`
+        });
+
+        const response = await fetch(`http://localhost:3001/api/approvals/${approvalId}/process`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            action: 'reject',
+            reason: rejectionReason
+          })
+        });
+
+        console.log('Response status:', response.status);
+        
+        if (response.ok) {
+          const responseData = await response.json();
+          console.log('Success response:', responseData);
+          
+          // Remove the rejected item from the list
+          setPendingApprovals(prev => prev.filter(app => app.id !== approvalId));
+          
+          // Show success message
+          Swal.fire({
+            title: 'Rejected!',
+            text: `${approval.title} has been rejected.`,
+            icon: 'success',
+            timer: 3000,
+            showConfirmButton: false,
+            backdrop: true,
+            customClass: {
+              popup: 'rounded-xl shadow-2xl',
+              title: 'text-lg font-semibold text-gray-900',
+              content: 'text-gray-600'
+            }
+          });
+        } else {
+          const errorData = await response.json();
+          console.error('Error response:', errorData);
+          throw new Error(`Server error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error rejecting request:', error);
+      
+      // Show detailed error information
+      const errorMessage = error.message.includes('Server error:') 
+        ? error.message 
+        : `Network/Connection Error: ${error.message}`;
+      
+      Swal.fire({
+        title: 'Error!',
+        html: `
+          <div class="text-left">
+            <p class="mb-2"><strong>Failed to reject the request.</strong></p>
+            <p class="text-sm text-gray-600 mb-2">Error details:</p>
+            <code class="text-xs bg-gray-100 p-2 rounded block">${errorMessage}</code>
+            <p class="text-sm text-gray-600 mt-2">Please check the console for more details and ensure the server is running.</p>
+          </div>
+        `,
+        icon: 'error',
+        confirmButtonColor: '#EF4444',
+        backdrop: true,
+        customClass: {
+          popup: 'rounded-xl shadow-2xl',
+          title: 'text-lg font-semibold text-gray-900',
+          content: 'text-gray-600',
+          confirmButton: 'rounded-lg px-6 py-2 font-medium'
+        }
+      });
+    }
+  };
+
+  const getFilteredApprovals = () => {
+    if (approvalFilter === 'all') return pendingApprovals;
+    
+    return pendingApprovals.filter(approval => {
+      switch (approvalFilter) {
+        case 'doctor':
+          return approval.type === 'Doctor Application';
+        case 'appointment':
+          return approval.type === 'Appointment Request';
+        case 'schedule':
+          return approval.type === 'Schedule Change';
+        case 'consultation':
+          return approval.type === 'Consultation Fee';
+        default:
+          return true;
       }
     });
   };
@@ -369,7 +675,7 @@ const AdminDashboard = () => {
   };
 
   const viewDoctorVerification = (doctor) => {
-    setActiveTab('doctors');
+    setActiveTab('verification');
     // Optional: You can also set the selected doctor if you want it to be highlighted
     // setSelectedDoctor(doctor);
   };
@@ -721,7 +1027,7 @@ const AdminDashboard = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setActiveTab('doctors')}
+                    onClick={() => setActiveTab('verification')}
                     className="text-xs sm:text-sm"
                   >
                     View All
@@ -1215,7 +1521,7 @@ const AdminDashboard = () => {
           </div>
         );
 
-      case 'doctors':
+      case 'verification':
         return (
           <div className="space-y-6">
             <div className="flex flex-col space-y-3 sm:flex-row sm:justify-between sm:items-center sm:space-y-0">
@@ -1528,6 +1834,142 @@ const AdminDashboard = () => {
             <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl p-6">
               <p className="text-gray-600">Appointment management interface will be implemented here.</p>
             </Card>
+          </div>
+        );
+
+      case 'approvals':
+        const filteredApprovals = getFilteredApprovals();
+        
+        return (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
+                <DocumentCheckIcon className="mr-2 sm:mr-3 w-6 h-6 sm:w-7 sm:h-7 text-green-600" />
+                Pending Approvals ({filteredApprovals.length})
+              </h2>
+              <div className="flex space-x-2">
+                <Button 
+                  onClick={handleRefreshApprovals}
+                  className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
+                >
+                  <ArrowPathIcon className="w-4 h-4 mr-2" />
+                  Refresh
+                </Button>
+                <select 
+                  value={approvalFilter} 
+                  onChange={(e) => setApprovalFilter(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="all">All Requests</option>
+                  <option value="doctor">Doctor Applications</option>
+                  <option value="appointment">Appointment Requests</option>
+                  <option value="schedule">Schedule Changes</option>
+                  <option value="consultation">Consultation Fees</option>
+                </select>
+              </div>
+            </div>
+            
+            {filteredApprovals.length > 0 ? (
+              <div className="space-y-4">
+                {filteredApprovals.map((approval) => (
+                  <Card key={approval.id} className={`p-4 ${approval.urgent ? 'border-orange-300 bg-orange-50/50' : 'bg-white/80'} backdrop-blur-sm hover:shadow-lg transition-all duration-200`}>
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                            approval.type === 'Doctor Application' ? 'bg-blue-100 text-blue-800' :
+                            approval.type === 'Schedule Change' ? 'bg-green-100 text-green-800' :
+                            approval.type === 'Consultation Fee' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-purple-100 text-purple-800'
+                          }`}>
+                            {approval.type}
+                          </span>
+                          <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-800">
+                            <UserIcon className="w-3 h-3 mr-1" />
+                            {approval.userRole ? approval.userRole.charAt(0).toUpperCase() + approval.userRole.slice(1) : 'Doctor'}
+                          </span>
+                          {approval.urgent && (
+                            <span className="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">
+                              <ExclamationCircleIcon className="w-3 h-3 mr-1" />
+                              Urgent
+                            </span>
+                          )}
+                          <span className="text-xs text-gray-500 flex items-center">
+                            <ClockIcon className="w-3 h-3 mr-1" />
+                            {approval.time}
+                          </span>
+                        </div>
+                        <h4 className="text-lg font-semibold text-gray-900 mb-1">{approval.title}</h4>
+                        <p className="text-sm text-gray-600 mb-2">{approval.description}</p>
+                        {approval.doctorEmail && (
+                          <p className="text-xs text-gray-500 mb-2 flex items-center">
+                            <EnvelopeIcon className="w-3 h-3 mr-1" />
+                            {approval.doctorEmail}
+                          </p>
+                        )}
+                        {approval.type === 'Consultation Fee' && approval.amount && (
+                          <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-green-800">Requested Fee:</span>
+                              <span className="text-lg font-bold text-green-900">
+                                {approval.currency === 'USD' ? '$' : 
+                                 approval.currency === 'EUR' ? '€' : 
+                                 approval.currency === 'GBP' ? '£' : 
+                                 approval.currency === 'INR' ? '₹' : '$'}{approval.amount}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-end items-center">
+                      <div className="flex space-x-2">
+                        <Button 
+                          onClick={() => handleRejectRequest(approval.id)}
+                          className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 text-sm"
+                        >
+                          <XCircleIcon className="w-4 h-4 mr-1" />
+                          Reject
+                        </Button>
+                        <Button 
+                          onClick={() => handleApproveRequest(approval.id)}
+                          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 text-sm"
+                        >
+                          <CheckCircleIcon className="w-4 h-4 mr-1" />
+                          Approve
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl p-8 text-center">
+                <div className="flex justify-center mb-4">
+                  <ClipboardDocumentListIcon className="w-16 h-16 text-gray-400" />
+                </div>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                  {approvalFilter === 'all' ? 'No Pending Approvals' : `No ${
+                    approvalFilter === 'doctor' ? 'Doctor Applications' : 
+                    approvalFilter === 'appointment' ? 'Appointment Requests' : 
+                    approvalFilter === 'schedule' ? 'Schedule Changes' :
+                    approvalFilter === 'consultation' ? 'Consultation Fee Requests' : 'Requests'
+                  }`}
+                </h3>
+                <p className="text-gray-600">
+                  {approvalFilter === 'all' 
+                    ? 'All requests have been processed. New requests will appear here when submitted.' 
+                    : `No ${
+                        approvalFilter === 'doctor' ? 'doctor applications' : 
+                        approvalFilter === 'appointment' ? 'appointment requests' : 
+                        approvalFilter === 'schedule' ? 'schedule change requests' :
+                        approvalFilter === 'consultation' ? 'consultation fee requests' : 'requests'
+                      } are currently pending.`
+                  }
+                </p>
+              </Card>
+            )}
           </div>
         );
 
