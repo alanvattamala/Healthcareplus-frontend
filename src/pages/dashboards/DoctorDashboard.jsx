@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Swal from 'sweetalert2';
-import { Card, Button, Modal } from '../../components';
+import { Card, Button, Modal, Calendar } from '../../components';
 import { handleLogout, getCurrentUser, requireRole, checkAuthAndRedirect } from '../../utils/auth';
 import {
   BellIcon,
@@ -22,7 +22,15 @@ import {
   HeartIcon,
   ChartBarIcon,
   BeakerIcon,
-  PowerIcon
+  PowerIcon,
+  CpuChipIcon,
+  ExclamationTriangleIcon,
+  CheckCircleIcon,
+  ComputerDesktopIcon,
+  ArchiveBoxIcon,
+  PlusIcon,
+  LightBulbIcon,
+  SparklesIcon
 } from '@heroicons/react/24/outline';
 
 const DoctorDashboard = () => {
@@ -50,6 +58,7 @@ const DoctorDashboard = () => {
   const [showScheduleExpiredModal, setShowScheduleExpiredModal] = useState(false);
   const [showScheduleStartModal, setShowScheduleStartModal] = useState(false);
   const [scheduleJustStarted, setScheduleJustStarted] = useState(false);
+  const [justSubmittedSchedule, setJustSubmittedSchedule] = useState(false);
   const [wasWithinSchedule, setWasWithinSchedule] = useState(false);
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
@@ -85,6 +94,44 @@ const DoctorDashboard = () => {
   const [feeAmount, setFeeAmount] = useState('');
   const [feeValidationError, setFeeValidationError] = useState('');
   const [currency, setCurrency] = useState('INR');
+
+  // Schedule setup state for first-time daily login
+  const [hasScheduleToday, setHasScheduleToday] = useState(null); // null = checking, true = has schedule, false = needs setup
+  const [showScheduleSetupModal, setShowScheduleSetupModal] = useState(false);
+  const [scheduleSetup, setScheduleSetup] = useState({
+    startTime: '',
+    endTime: ''
+  });
+  const [scheduleSetupError, setScheduleSetupError] = useState('');
+
+  // Go online confirmation modal state
+  const [showGoOnlineModal, setShowGoOnlineModal] = useState(false);
+  const [goOnlineModalData, setGoOnlineModalData] = useState({
+    title: '',
+    message: '',
+    source: '' // 'schedule' or 'availability'
+  });
+
+  // Upcoming Schedules Management State
+  const [selectedDates, setSelectedDates] = useState([]);
+  const [scheduleMode, setScheduleMode] = useState('same'); // 'same' or 'custom'
+  const [defaultTimes, setDefaultTimes] = useState({
+    startTime: '09:00',
+    endTime: '17:00'
+  });
+  const [customSchedules, setCustomSchedules] = useState({});
+  const [existingSchedules, setExistingSchedules] = useState({});
+  const [upcomingSchedules, setUpcomingSchedules] = useState([]);
+  const [completedSchedules, setCompletedSchedules] = useState({});
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+
+  // Helper function to format date as YYYY-MM-DD without timezone issues
+  const formatDateString = (date) => {
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
   // Mock notifications data
   const notifications = [
@@ -239,6 +286,7 @@ const DoctorDashboard = () => {
   // Function to handle extending schedule
   const handleExtendSchedule = () => {
     setShowScheduleExpiredModal(false);
+    setJustSubmittedSchedule(false);
     
     // Show options for quick extension
     Swal.fire({
@@ -384,6 +432,7 @@ const DoctorDashboard = () => {
       // setScheduleExpired(true); // REMOVED - this was causing the issue
       setShowScheduleExpiredModal(false);
       setShowExtensionPrompt(false);
+      setJustSubmittedSchedule(false);
       
       // Save to database
       const saveResult = await saveAvailabilityToDatabase(newAvailability);
@@ -447,8 +496,74 @@ const DoctorDashboard = () => {
     }
   };
 
+  // Helper function to save both schedule and availability to database
+  const saveBothToDatabase = async (scheduleData, availabilityData) => {
+    const token = localStorage.getItem('token');
+    const errors = [];
+
+    try {
+      // 1. Save to schedule collection with timestamp
+      const scheduleResponse = await fetch('http://localhost:3001/api/schedules/today', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          startTime: scheduleData.startTime,
+          endTime: scheduleData.endTime,
+          lastUpdated: new Date().toISOString(),
+          submittedAt: new Date().toISOString()
+        })
+      });
+
+      if (!scheduleResponse.ok) {
+        const errorData = await scheduleResponse.json();
+        errors.push(`Schedule save failed: ${errorData.message || 'Unknown error'}`);
+      }
+
+      // 2. Save to availability collection (for compatibility) with timestamp
+      const availabilityWithTimestamp = {
+        ...availabilityData,
+        lastUpdated: new Date().toISOString(),
+        submittedAt: new Date().toISOString()
+      };
+      const availabilityResult = await saveAvailabilityToDatabase(availabilityWithTimestamp);
+      if (!availabilityResult.success) {
+        errors.push(`Availability save failed: ${availabilityResult.error}`);
+      }
+
+      if (errors.length > 0) {
+        throw new Error(errors.join('; '));
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('Database operations failed:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
   // Enhanced function to handle going online with schedule validation
   const handleGoOnline = async () => {
+    // Check if doctor has set today's schedule
+    if (hasScheduleToday === false) {
+      Swal.fire({
+        title: 'Schedule Not Set',
+        text: 'Please set your daily schedule before going online.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b',
+        showCancelButton: true,
+        confirmButtonText: 'Set Schedule Now',
+        cancelButtonText: 'Later'
+      }).then((result) => {
+        if (result.isConfirmed) {
+          setShowScheduleSetupModal(true);
+        }
+      });
+      return;
+    }
+
     // Check if doctor has set availability and if current time is within scheduled period
     if (!hasSetAvailability) {
       Swal.fire({
@@ -630,6 +745,622 @@ const DoctorDashboard = () => {
       status: 'not_set',
       rejectionReason: null
     });
+  };
+
+  // Schedule setup handlers
+  const handleScheduleSetupChange = (field, value) => {
+    setScheduleSetup(prev => ({
+      ...prev,
+      [field]: value
+    }));
+    setScheduleSetupError('');
+  };
+
+  // Upcoming Schedules API Functions
+  const fetchExistingSchedules = async (dates) => {
+    try {
+      const token = localStorage.getItem('token');
+      const dateStrings = dates.map(date => {
+        const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+        return dateStr;
+      }).join(',');
+
+      const response = await fetch(`http://localhost:3001/api/schedules/check-exists?dates=${dateStrings}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setExistingSchedules(result.data.scheduleExists);
+      } else {
+        console.error('Failed to fetch existing schedules');
+      }
+    } catch (error) {
+      console.error('Error fetching existing schedules:', error);
+    }
+  };
+
+  const fetchUpcomingSchedules = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/api/schedules/upcoming', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setUpcomingSchedules(result.data.schedules);
+        
+        // Also update existing schedules for calendar indicators
+        const existingByDate = {};
+        result.data.schedules.forEach(schedule => {
+          const dateStr = formatDateString(new Date(schedule.date));
+          existingByDate[dateStr] = schedule;
+        });
+        setExistingSchedules(existingByDate);
+      } else {
+        console.error('Failed to fetch upcoming schedules');
+      }
+    } catch (error) {
+      console.error('Error fetching upcoming schedules:', error);
+    }
+  };
+
+  const fetchCompletedSchedules = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      
+      // Fetch schedule history (past schedules) from the database
+      const response = await fetch('http://localhost:3001/api/schedules/history?limit=100', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // Convert array to object with date as key for easy lookup
+        // Only include past dates (completed schedules)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Reset time to compare dates only
+        
+        const completedByDate = {};
+        result.data.schedules.forEach(schedule => {
+          const scheduleDate = new Date(schedule.date);
+          scheduleDate.setHours(0, 0, 0, 0);
+          
+          // Only include schedules from past dates
+          if (scheduleDate < today) {
+            const dateStr = formatDateString(scheduleDate);
+            completedByDate[dateStr] = {
+              ...schedule,
+              status: 'completed'
+            };
+          }
+        });
+        setCompletedSchedules(completedByDate);
+      } else {
+        console.error('Failed to fetch completed schedules');
+        setCompletedSchedules({});
+      }
+    } catch (error) {
+      console.error('Error fetching completed schedules:', error);
+      setCompletedSchedules({});
+    }
+  };
+
+  const saveUpcomingSchedules = async (schedules) => {
+    try {
+      setScheduleLoading(true);
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch('http://localhost:3001/api/schedules/upcoming', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ schedules })
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        await fetchUpcomingSchedules(); // Refresh the list
+        return { success: true, data: result };
+      } else {
+        throw new Error(result.message || 'Failed to save schedules');
+      }
+    } catch (error) {
+      console.error('Error saving upcoming schedules:', error);
+      return { success: false, error: error.message };
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
+
+  const deleteUpcomingSchedule = async (scheduleId) => {
+    try {
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch(`http://localhost:3001/api/schedules/upcoming/${scheduleId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        await fetchUpcomingSchedules(); // Refresh the list
+        return { success: true };
+      } else {
+        const result = await response.json();
+        throw new Error(result.message || 'Failed to delete schedule');
+      }
+    } catch (error) {
+      console.error('Error deleting upcoming schedule:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  // Upcoming Schedules Handlers
+  const handleDateSelect = (date, isSelected) => {
+    const dateStr = formatDateString(date);
+    
+    if (isSelected) {
+      // Remove date
+      setSelectedDates(prev => prev.filter(d => {
+        const dStr = typeof d === 'string' ? d : formatDateString(new Date(d));
+        return dStr !== dateStr;
+      }));
+      
+      // Remove from custom schedules
+      setCustomSchedules(prev => {
+        const newSchedules = { ...prev };
+        delete newSchedules[dateStr];
+        return newSchedules;
+      });
+    } else {
+      // Add date - store as date string to avoid timezone issues
+      setSelectedDates(prev => [...prev, dateStr]);
+      
+      // Initialize custom schedule with default times
+      if (scheduleMode === 'custom') {
+        setCustomSchedules(prev => ({
+          ...prev,
+          [dateStr]: {
+            startTime: defaultTimes.startTime,
+            endTime: defaultTimes.endTime
+          }
+        }));
+      }
+    }
+  };
+
+  const handleScheduleModeChange = (mode) => {
+    setScheduleMode(mode);
+    
+    if (mode === 'custom') {
+      // Initialize custom schedules for selected dates
+      const newCustomSchedules = {};
+      selectedDates.forEach(date => {
+        const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+        newCustomSchedules[dateStr] = {
+          startTime: defaultTimes.startTime,
+          endTime: defaultTimes.endTime
+        };
+      });
+      setCustomSchedules(newCustomSchedules);
+    } else {
+      setCustomSchedules({});
+    }
+  };
+
+  // Helper function to validate time range
+  const validateTimeRange = (startTime, endTime) => {
+    if (!startTime || !endTime) return true; // Allow empty values during input
+    
+    const start = new Date(`2000-01-01T${startTime}`);
+    const end = new Date(`2000-01-01T${endTime}`);
+    
+    // Check if end time is after start time
+    if (end <= start) return false;
+    
+    // Check if the duration is at least 30 minutes
+    const duration = (end - start) / (1000 * 60); // duration in minutes
+    return duration >= 30;
+  };
+
+  // Helper function to show time validation error
+  const showTimeValidationError = (message) => {
+    Swal.fire({
+      title: 'Invalid Time Range',
+      text: message,
+      icon: 'error',
+      confirmButtonText: 'OK',
+      confirmButtonColor: '#EF4444'
+    });
+  };
+
+  // Helper function to get input styling based on validation
+  const getTimeInputStyling = (startTime, endTime, isEndTimeField = false) => {
+    const baseStyle = "w-full px-3 py-2 border rounded-lg focus:ring-2 focus:border-transparent transition-colors";
+    
+    if (!startTime || !endTime) {
+      return `${baseStyle} border-gray-300 focus:ring-blue-500`;
+    }
+    
+    const isValid = validateTimeRange(startTime, endTime);
+    
+    if (isValid) {
+      return `${baseStyle} border-green-300 bg-green-50 focus:ring-green-500`;
+    } else if (isEndTimeField) {
+      return `${baseStyle} border-red-300 bg-red-50 focus:ring-red-500`;
+    } else {
+      return `${baseStyle} border-gray-300 focus:ring-blue-500`;
+    }
+  };
+
+  // Helper function to get validation message
+  const getTimeValidationMessage = (startTime, endTime) => {
+    if (!startTime || !endTime) return null;
+    
+    const start = new Date(`2000-01-01T${startTime}`);
+    const end = new Date(`2000-01-01T${endTime}`);
+    
+    if (end <= start) {
+      return "End time must be after start time";
+    }
+    
+    const duration = (end - start) / (1000 * 60);
+    if (duration < 30) {
+      return "Schedule must be at least 30 minutes long";
+    }
+    
+    return null;
+  };
+
+  const handleDefaultTimesChange = (field, value) => {
+    const newTimes = {
+      ...defaultTimes,
+      [field]: value
+    };
+    
+    // Validate time range when both start and end times are set
+    if (newTimes.startTime && newTimes.endTime) {
+      if (!validateTimeRange(newTimes.startTime, newTimes.endTime)) {
+        showTimeValidationError('End time must be after start time and the schedule must be at least 30 minutes long.');
+        return; // Don't update if validation fails
+      }
+    }
+    
+    setDefaultTimes(newTimes);
+  };
+
+  const handleCustomScheduleChange = (date, field, value) => {
+    const currentSchedule = customSchedules[date] || {};
+    const newSchedule = {
+      ...currentSchedule,
+      [field]: value
+    };
+    
+    // Validate time range when both start and end times are set
+    if (newSchedule.startTime && newSchedule.endTime) {
+      if (!validateTimeRange(newSchedule.startTime, newSchedule.endTime)) {
+        showTimeValidationError(`End time must be after start time and the schedule must be at least 30 minutes long for ${new Date(date).toLocaleDateString()}.`);
+        return; // Don't update if validation fails
+      }
+    }
+    
+    setCustomSchedules(prev => ({
+      ...prev,
+      [date]: newSchedule
+    }));
+  };
+
+  const validateScheduleData = (schedules) => {
+    const errors = [];
+    
+    schedules.forEach((schedule, index) => {
+      const { date, startTime, endTime } = schedule;
+      
+      // Validate time format
+      const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+      if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
+        errors.push(`Invalid time format for ${date}`);
+        return;
+      }
+      
+      // Validate time logic
+      const [startHour, startMinute] = startTime.split(':').map(Number);
+      const [endHour, endMinute] = endTime.split(':').map(Number);
+      const startMinutes = startHour * 60 + startMinute;
+      const endMinutes = endHour * 60 + endMinute;
+      
+      if (endMinutes <= startMinutes) {
+        errors.push(`End time must be after start time for ${date}`);
+      }
+      
+      if (endMinutes - startMinutes < 30) {
+        errors.push(`Schedule must be at least 30 minutes long for ${date}`);
+      }
+    });
+    
+    return errors;
+  };
+
+  const handleSaveUpcomingSchedules = async () => {
+    if (selectedDates.length === 0) {
+      Swal.fire({
+        title: 'No Dates Selected',
+        text: 'Please select at least one date to create schedules.',
+        icon: 'warning',
+        confirmButtonColor: '#f59e0b'
+      });
+      return;
+    }
+
+    // Prepare schedule data
+    const schedules = selectedDates.map(date => {
+      const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+      
+      if (scheduleMode === 'custom' && customSchedules[dateStr]) {
+        return {
+          date: dateStr,
+          startTime: customSchedules[dateStr].startTime,
+          endTime: customSchedules[dateStr].endTime
+        };
+      } else {
+        return {
+          date: dateStr,
+          startTime: defaultTimes.startTime,
+          endTime: defaultTimes.endTime
+        };
+      }
+    });
+
+    // Validate data
+    const validationErrors = validateScheduleData(schedules);
+    if (validationErrors.length > 0) {
+      Swal.fire({
+        title: 'Validation Errors',
+        html: validationErrors.map(error => `• ${error}`).join('<br>'),
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
+      return;
+    }
+
+    // Check for existing schedules
+    const conflictingDates = [];
+    schedules.forEach(schedule => {
+      if (existingSchedules[schedule.date]) {
+        conflictingDates.push(schedule.date);
+      }
+    });
+
+    if (conflictingDates.length > 0) {
+      const result = await Swal.fire({
+        title: 'Existing Schedules Found',
+        html: `The following dates already have schedules:<br><br>
+          <strong>${conflictingDates.join(', ')}</strong><br><br>
+          Do you want to overwrite them?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#f59e0b',
+        cancelButtonColor: '#6b7280',
+        confirmButtonText: 'Yes, Overwrite',
+        cancelButtonText: 'Cancel'
+      });
+
+      if (!result.isConfirmed) {
+        return;
+      }
+    }
+
+    // Save schedules
+    const saveResult = await saveUpcomingSchedules(schedules);
+
+    if (saveResult.success) {
+      const { successCount, errorCount } = saveResult.data;
+      
+      Swal.fire({
+        title: 'Schedules Saved!',
+        html: `Successfully saved ${successCount} schedule(s).${errorCount > 0 ? `<br>${errorCount} schedule(s) had errors.` : ''}`,
+        icon: successCount > 0 ? 'success' : 'warning',
+        confirmButtonColor: '#10b981'
+      });
+
+      // Reset form
+      setSelectedDates([]);
+      setCustomSchedules({});
+      setShowUpcomingSchedulesModal(false);
+      
+      // Refresh existing schedules
+      await fetchExistingSchedules(selectedDates);
+    } else {
+      Swal.fire({
+        title: 'Save Failed',
+        text: saveResult.error,
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
+    }
+  };
+
+  const handleDeleteUpcomingSchedule = async (scheduleId, date) => {
+    const result = await Swal.fire({
+      title: 'Delete Schedule?',
+      text: `Are you sure you want to delete the schedule for ${date}?`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: 'Yes, Delete',
+      cancelButtonText: 'Cancel'
+    });
+
+    if (result.isConfirmed) {
+      const deleteResult = await deleteUpcomingSchedule(scheduleId);
+      
+      if (deleteResult.success) {
+        Swal.fire({
+          title: 'Deleted!',
+          text: 'Schedule has been deleted.',
+          icon: 'success',
+          confirmButtonColor: '#10b981'
+        });
+      } else {
+        Swal.fire({
+          title: 'Delete Failed',
+          text: deleteResult.error,
+          icon: 'error',
+          confirmButtonColor: '#ef4444'
+        });
+      }
+    }
+  };
+
+  const validateScheduleTime = (startTime, endTime) => {
+    if (!startTime || !endTime) {
+      return 'Both start time and end time are required';
+    }
+
+    const [startHour, startMinute] = startTime.split(':').map(Number);
+    const [endHour, endMinute] = endTime.split(':').map(Number);
+    
+    const startTotalMinutes = startHour * 60 + startMinute;
+    const endTotalMinutes = endHour * 60 + endMinute;
+
+    if (endTotalMinutes <= startTotalMinutes) {
+      return 'End time must be after start time';
+    }
+
+    const durationMinutes = endTotalMinutes - startTotalMinutes;
+    if (durationMinutes < 60) {
+      return 'Schedule duration must be at least 1 hour';
+    }
+
+    return null;
+  };
+
+  const handleSubmitScheduleSetup = async () => {
+    const { startTime, endTime } = scheduleSetup;
+    
+    // Validate schedule
+    const validationError = validateScheduleTime(startTime, endTime);
+    if (validationError) {
+      setScheduleSetupError(validationError);
+      return;
+    }
+
+    try {
+      // Save to both schedule API and update availability
+      const updatedAvailability = {
+        ...doctorAvailability,
+        isAvailable: true,
+        dailySchedule: {
+          date: new Date().toISOString().split('T')[0],
+          isActive: true,
+          startTime,
+          endTime
+        }
+      };
+
+      // Use the helper function to save to both collections
+      const saveResult = await saveBothToDatabase(
+        { startTime, endTime },
+        updatedAvailability
+      );
+
+      if (saveResult.success) {
+        // Check if the start time has already begun
+        const currentTime = new Date();
+        const currentHours = currentTime.getHours();
+        const currentMinutes = currentTime.getMinutes();
+        const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+        const [startHour, startMinute] = startTime.split(':').map(Number);
+        const startTotalMinutes = startHour * 60 + startMinute;
+
+        const timeHasStarted = currentTotalMinutes >= startTotalMinutes;
+        
+        // Update state
+        setHasScheduleToday(true);
+        setHasSetAvailability(true);
+        setShowScheduleSetupModal(false);
+        
+        // Update doctor availability
+        setDoctorAvailability(prev => ({
+          ...prev,
+          dailySchedule: {
+            date: new Date().toISOString().split('T')[0],
+            isActive: true,
+            startTime,
+            endTime
+          }
+        }));
+
+        // Reset form
+        setScheduleSetup({
+          startTime: '',
+          endTime: ''
+        });
+        setScheduleSetupError('');
+
+        // Show different messages based on whether time has started
+        if (timeHasStarted) {
+          // Time has started - show custom modal offering to go online
+          setGoOnlineModalData({
+            title: 'Schedule Set Successfully!',
+            message: 'Your daily schedule has been set. Since your scheduled time has already started, would you like to go online now?',
+            source: 'schedule'
+          });
+          setShowGoOnlineModal(true);
+        } else {
+          // Time hasn't started yet - just show success message
+          Swal.fire({
+            title: 'Success!',
+            text: 'Your daily schedule has been set successfully. You will be able to go online at your scheduled time.',
+            icon: 'success',
+            confirmButtonColor: '#10B981'
+          });
+        }
+      } else {
+        setScheduleSetupError(saveResult.error || 'Failed to save schedule');
+      }
+    } catch (error) {
+      console.error('Error saving schedule:', error);
+      setScheduleSetupError('Network error. Please try again.');
+    }
+  };
+
+  const handleSkipScheduleSetup = () => {
+    setShowScheduleSetupModal(false);
+    // Keep hasScheduleToday as false, doctor will remain offline
+  };
+
+  // Go online modal handlers
+  const handleGoOnlineConfirm = () => {
+    setIsOnline(true);
+    setShowGoOnlineModal(false);
+    
+    Swal.fire({
+      title: 'You\'re Online!',
+      text: 'You are now accepting patients.',
+      icon: 'success',
+      confirmButtonColor: '#10b981',
+      timer: 2000,
+      showConfirmButton: false
+    });
+  };
+
+  const handleGoOnlineCancel = () => {
+    setShowGoOnlineModal(false);
   };
 
   // Check authentication and role on component mount
@@ -911,6 +1642,69 @@ const DoctorDashboard = () => {
     checkAuth();
   }, [navigate]);
 
+  // Check for today's schedule on component mount
+  useEffect(() => {
+    const checkTodaySchedule = async () => {
+      if (!user || user.userType !== 'doctor') return;
+
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('http://localhost:3001/api/schedules/today', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.data.schedule) {
+            // Schedule exists for today
+            setHasScheduleToday(true);
+            // Update the doctor availability with today's schedule
+            setDoctorAvailability(prev => ({
+              ...prev,
+              dailySchedule: {
+                date: new Date().toISOString().split('T')[0],
+                isActive: true,
+                startTime: data.data.schedule.startTime,
+                endTime: data.data.schedule.endTime
+              }
+            }));
+            // Set hasSetAvailability to true since schedule exists
+            setHasSetAvailability(true);
+          } else {
+            // No schedule set for today
+            setHasScheduleToday(false);
+            // Show the schedule setup modal after a brief delay only if no schedule exists
+            setTimeout(() => {
+              setShowScheduleSetupModal(true);
+            }, 1000);
+          }
+        } else if (response.status === 404) {
+          // No schedule found for today
+          setHasScheduleToday(false);
+          setHasSetAvailability(false);
+          setTimeout(() => {
+            setShowScheduleSetupModal(true);
+          }, 1000);
+        } else {
+          console.error('Error checking today\'s schedule:', response.statusText);
+          setHasScheduleToday(false);
+          setHasSetAvailability(false);
+        }
+      } catch (error) {
+        console.error('Error checking today\'s schedule:', error);
+        setHasScheduleToday(false);
+        setHasSetAvailability(false);
+      }
+    };
+
+    // Only check schedule if user is loaded
+    if (user && user.userType === 'doctor') {
+      checkTodaySchedule();
+    }
+  }, [user]);
+
   // Update current time every minute
   useEffect(() => {
     const timer = setInterval(() => {
@@ -961,8 +1755,9 @@ const DoctorDashboard = () => {
       const justStarted = checkScheduleJustStarted();
       const justEnteredSchedule = !wasWithinSchedule && withinSchedule;
       
-      if ((justStarted || justEnteredSchedule) && !scheduleJustStarted && !showScheduleStartModal && !isOnline) {
-        console.log('Schedule just started - showing start modal', { justStarted, justEnteredSchedule });
+      // Only show start modal if schedule was just submitted and conditions are met
+      if ((justStarted || justEnteredSchedule) && justSubmittedSchedule && !scheduleJustStarted && !showScheduleStartModal && !isOnline) {
+        console.log('Schedule just started after submission - showing start modal', { justStarted, justEnteredSchedule });
         setScheduleJustStarted(true);
         setShowScheduleStartModal(true);
       }
@@ -976,7 +1771,7 @@ const DoctorDashboard = () => {
       setWasWithinSchedule(withinSchedule);
       
       // Automatically set offline if outside scheduled hours and currently online
-      if (!withinSchedule && isOnline) {
+      if (!withinSchedule && isOnline && !justSubmittedSchedule) {
         console.log('Outside scheduled hours - automatically going offline');
         setIsOnline(false);
         
@@ -989,7 +1784,7 @@ const DoctorDashboard = () => {
         saveAvailabilityToDatabase(updatedAvailability);
         
         if (!isExpired) {
-          // Before scheduled time
+          // Before scheduled time - only show info if not just submitted
           Swal.fire({
             title: 'Outside Scheduled Hours',
             text: `You are automatically offline. Your schedule starts at ${doctorAvailability.dailySchedule.startTime}.`,
@@ -1000,7 +1795,8 @@ const DoctorDashboard = () => {
       }
       
       // If schedule just expired and we haven't shown the modal yet
-      if (isExpired && !scheduleExpired) {
+      // Only trigger automatically if this wasn't just submitted (submission logic handles this)
+      if (isExpired && !scheduleExpired && !justSubmittedSchedule) {
         console.log('Schedule just expired - triggering modal and going offline');
         setScheduleExpired(true);
         setShowScheduleExpiredModal(true);
@@ -1015,7 +1811,7 @@ const DoctorDashboard = () => {
         saveAvailabilityToDatabase(updatedAvailability);
       }
     }
-  }, [currentTime, hasSetAvailability, doctorAvailability.dailySchedule?.endTime, doctorAvailability.dailySchedule?.startTime, showScheduleExpiredModal, scheduleExpired, isOnline, scheduleJustStarted, showScheduleStartModal, wasWithinSchedule]);
+  }, [currentTime, hasSetAvailability, doctorAvailability.dailySchedule?.endTime, doctorAvailability.dailySchedule?.startTime, showScheduleExpiredModal, scheduleExpired, isOnline, scheduleJustStarted, showScheduleStartModal, wasWithinSchedule, justSubmittedSchedule]);
 
   // Handle clicks outside dropdowns
   useEffect(() => {
@@ -1078,6 +1874,27 @@ const DoctorDashboard = () => {
     };
   }, [isOnline, doctorAvailability.dailySchedule.isActive, doctorAvailability.dailySchedule.endTime, hasTimeExceeded, showExtensionModal]);
 
+  // Load upcoming schedules when tab is active
+  useEffect(() => {
+    if (activeTab === 'upcoming-schedules') {
+      fetchUpcomingSchedules();
+      fetchCompletedSchedules();
+    }
+  }, [activeTab]);
+
+  // Fetch existing schedules when dates are selected
+  useEffect(() => {
+    if (selectedDates.length > 0) {
+      fetchExistingSchedules(selectedDates);
+    }
+  }, [selectedDates]);
+
+  // Load completed schedules and upcoming schedules on component mount for calendar display
+  useEffect(() => {
+    fetchCompletedSchedules();
+    fetchUpcomingSchedules();
+  }, []);
+
   const onLogout = () => {
     Swal.fire({
       title: 'Are you sure?',
@@ -1110,7 +1927,7 @@ const DoctorDashboard = () => {
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-blue-600' },
     { id: 'appointments', label: 'Appointments', icon: CalendarDaysIcon, gradient: 'from-green-500 to-green-600' },
     { id: 'patients', label: 'Patients', icon: UsersIcon, gradient: 'from-purple-500 to-purple-600' },
-    // { id: 'availability', label: 'Availability', icon: ClockIcon, gradient: 'from-emerald-500 to-emerald-600' },
+    { id: 'upcoming-schedules', label: 'Set Schedules', icon: ClockIcon, gradient: 'from-emerald-500 to-emerald-600' },
     { id: 'prescriptions', label: 'E-Prescribe', icon: BeakerIcon, gradient: 'from-pink-500 to-rose-600' },
     { id: 'records', label: 'Records', icon: DocumentTextIcon, gradient: 'from-indigo-500 to-indigo-600' },
     { id: 'chat', label: 'Chat', icon: ChatBubbleLeftIcon, gradient: 'from-cyan-500 to-cyan-600' }
@@ -1126,7 +1943,7 @@ const DoctorDashboard = () => {
       status: 'confirmed',
       symptoms: 'Headache, fever',
       patientId: 'P12345',
-      avatar: '👩',
+      gender: 'Female',
       priority: 'normal'
     },
     {
@@ -1137,7 +1954,7 @@ const DoctorDashboard = () => {
       status: 'pending',
       symptoms: 'Chest pain, shortness of breath',
       patientId: 'P12346',
-      avatar: '👨',
+      gender: 'Male',
       priority: 'high'
     },
     {
@@ -1148,7 +1965,7 @@ const DoctorDashboard = () => {
       status: 'confirmed',
       symptoms: 'Skin rash',
       patientId: 'P12347',
-      avatar: '👩',
+      gender: 'Female',
       priority: 'normal'
     }
   ];
@@ -1161,8 +1978,7 @@ const DoctorDashboard = () => {
       gender: 'Female',
       lastVisit: '2025-07-28',
       condition: 'Hypertension',
-      vitals: { bp: '140/90', hr: '78', temp: '98.6°F' },
-      avatar: '👩'
+      vitals: { bp: '140/90', hr: '78', temp: '98.6°F' }
     },
     {
       id: 'P12346',
@@ -1171,8 +1987,7 @@ const DoctorDashboard = () => {
       gender: 'Male',
       lastVisit: '2025-07-30',
       condition: 'Diabetes Type 2',
-      vitals: { bp: '130/85', hr: '82', temp: '99.1°F' },
-      avatar: '👨'
+      vitals: { bp: '130/85', hr: '82', temp: '99.1°F' }
     },
     {
       id: 'P12347',
@@ -1181,8 +1996,7 @@ const DoctorDashboard = () => {
       gender: 'Female',
       lastVisit: '2025-08-01',
       condition: 'Allergic Dermatitis',
-      vitals: { bp: '120/80', hr: '72', temp: '98.4°F' },
-      avatar: '👩'
+      vitals: { bp: '120/80', hr: '72', temp: '98.4°F' }
     }
   ];
 
@@ -1233,18 +2047,33 @@ const DoctorDashboard = () => {
                     // After availability is set - show online/offline controls
                     <>
                       <div className={`flex items-center space-x-2 px-4 py-2 rounded-full ${
-                        isOnline && doctorAvailability.dailySchedule.isActive ? 'bg-green-500/20 text-green-100' : 'bg-red-500/20 text-red-100'
+                        hasScheduleToday === false
+                          ? 'bg-yellow-500/20 text-yellow-100'
+                          : isOnline && doctorAvailability.dailySchedule.isActive 
+                            ? 'bg-green-500/20 text-green-100' 
+                            : 'bg-red-500/20 text-red-100'
                       }`}>
                         <div className={`w-3 h-3 rounded-full ${
-                          isOnline && doctorAvailability.dailySchedule.isActive ? 'bg-green-300' : 'bg-red-300'
+                          hasScheduleToday === false
+                            ? 'bg-yellow-300'
+                            : isOnline && doctorAvailability.dailySchedule.isActive 
+                              ? 'bg-green-300' 
+                              : 'bg-red-300'
                         } animate-pulse`}></div>
                         <span className="text-sm font-medium">
-                          {isOnline && doctorAvailability.dailySchedule.isActive ? 'Online & Available' : 'Offline'}
+                          {hasScheduleToday === false
+                            ? 'Schedule Not Set'
+                            : isOnline && doctorAvailability.dailySchedule.isActive 
+                              ? 'Online & Available' 
+                              : 'Offline'
+                          }
                         </span>
                       </div>
                       <Button 
                         onClick={async () => {
-                          if (!isOnline) {
+                          if (hasScheduleToday === false) {
+                            setShowScheduleSetupModal(true);
+                          } else if (!isOnline) {
                             // Use the same enhanced validation as floating button
                             handleGoOnline();
                           } else {
@@ -1255,7 +2084,12 @@ const DoctorDashboard = () => {
                         className="bg-white/20 hover:bg-white/30 text-white border-white/20 text-sm"
                         size="sm"
                       >
-                        {isOnline ? 'Go Offline' : 'Go Online'}
+                        {hasScheduleToday === false
+                          ? 'Set Schedule'
+                          : isOnline 
+                            ? 'Go Offline' 
+                            : 'Go Online'
+                        }
                       </Button>
                     </>
                   )}
@@ -1270,24 +2104,37 @@ const DoctorDashboard = () => {
                     </div>
                     
                     <div className="flex items-center space-x-3">
-                      <Button 
-                        onClick={() => setActiveTab('availability')}
-                        className="bg-emerald-500/20 hover:bg-emerald-500/30 text-white border-emerald-300/30 text-xs sm:text-sm px-3 py-1 flex items-center space-x-1"
-                        size="sm"
-                      >
-                        <ClockIcon className="w-3 h-3 sm:w-4 sm:h-4 " />
-                        <span className="hidden sm:inline">Manage Availability</span>
-                        <span className="sm:hidden">Manage</span>
-                      </Button>
+                      {hasScheduleToday === false ? (
+                        <Button 
+                          onClick={() => setShowScheduleSetupModal(true)}
+                          className="bg-blue-500/20 hover:bg-blue-500/30 text-white border-blue-300/30 text-xs sm:text-sm px-3 py-1 flex items-center space-x-1"
+                          size="sm"
+                        >
+                          <CalendarDaysIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+                          <span className="hidden sm:inline">Set Schedule</span>
+                          <span className="sm:hidden">Set</span>
+                        </Button>
+                      ) : (
+                        <Button 
+                          onClick={() => setActiveTab('availability')}
+                          className="bg-emerald-500/20 hover:bg-emerald-500/30 text-white border-emerald-300/30 text-xs sm:text-sm px-3 py-1 flex items-center space-x-1"
+                          size="sm"
+                        >
+                          <ClockIcon className="w-3 h-3 sm:w-4 sm:h-4 " />
+                          <span className="hidden sm:inline">Update Schedule</span>
+                          <span className="sm:hidden">Update</span>
+                        </Button>
+                      )}
                     </div>
                   </div>
                   
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between space-y-3 sm:space-y-0 mt-4">
                     
                     <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
-                      {hasSetAvailability && doctorAvailability.dailySchedule.startTime && doctorAvailability.dailySchedule.endTime ? (
+                      {hasScheduleToday === true && doctorAvailability.dailySchedule.startTime && doctorAvailability.dailySchedule.endTime ? (
                         <div className="space-y-2">
                           <div className="text-white text-sm sm:text-base font-medium">
+                            <CalendarDaysIcon className="w-4 h-4 inline mr-1" />
                             {doctorAvailability.dailySchedule.startTime} - {doctorAvailability.dailySchedule.endTime}
                             {doctorAvailability.breakTime?.enabled && (
                               <span className="text-white/80 text-xs sm:text-sm ml-2">
@@ -1329,9 +2176,22 @@ const DoctorDashboard = () => {
                             </span>
                           </div>
                         </div>
+                      ) : hasScheduleToday === false ? (
+                        <div className="space-y-2">
+                          <div className="text-yellow-200 text-sm font-medium flex items-center space-x-2">
+                            <ClockIcon className="w-4 h-4" />
+                            <span>No schedule set for today</span>
+                          </div>
+                          <div className="text-yellow-200/80 text-xs">
+                            Set your daily schedule to start accepting patients
+                          </div>
+                        </div>
                       ) : (
-                        <div className="text-red-200 text-sm">
-                          No schedule set for today
+                        <div className="space-y-2">
+                          <div className="text-blue-200 text-sm font-medium flex items-center space-x-2">
+                            <div className="w-4 h-4 border-2 border-blue-200 border-t-transparent rounded-full animate-spin"></div>
+                            <span>Checking today's schedule...</span>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1439,7 +2299,7 @@ const DoctorDashboard = () => {
             {/* Quick Actions - Enhanced Responsive Design */}
             <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 p-4 sm:p-6">
               <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6 flex items-center">
-                <span className="mr-2 sm:mr-3 text-xl sm:text-2xl">⚡</span>
+                <PowerIcon className="mr-2 sm:mr-3 h-6 w-6 sm:h-8 sm:w-8 text-blue-600" />
                 Quick Actions
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -1492,12 +2352,12 @@ const DoctorDashboard = () => {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-2 sm:mr-3 text-2xl sm:text-3xl">📅</span>
+                <CalendarDaysIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-blue-600" />
                 <span className="hidden sm:inline">Appointment Management</span>
                 <span className="sm:hidden">Appointments</span>
               </h2>
               <Button className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-lg hover:shadow-xl transition-all duration-300 text-sm">
-                <span className="mr-2">➕</span>
+                <PlusIcon className="mr-2 h-5 w-5" />
                 <span className="hidden sm:inline">New Appointment</span>
                 <span className="sm:hidden">New</span>
               </Button>
@@ -1570,12 +2430,12 @@ const DoctorDashboard = () => {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-2 sm:mr-3 text-2xl sm:text-3xl">👥</span>
+                <UsersIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-purple-600" />
                 <span className="hidden sm:inline">Patient Profiles</span>
                 <span className="sm:hidden">Patients</span>
               </h2>
               <Button className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-sm">
-                <span className="mr-2">👤</span>
+                <UserIcon className="w-4 h-4 mr-2" />
                 <span className="hidden sm:inline">Add Patient</span>
                 <span className="sm:hidden">Add</span>
               </Button>
@@ -1933,41 +2793,94 @@ const DoctorDashboard = () => {
                   try {
                     setIsLoading(true);
                     
+                    // Check current time and schedule times
+                    const currentTime = new Date();
+                    const currentHours = currentTime.getHours();
+                    const currentMinutes = currentTime.getMinutes();
+                    const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+                    const [startHour, startMinute] = updatedAvailability.dailySchedule.startTime.split(':').map(Number);
+                    const [endHour, endMinute] = updatedAvailability.dailySchedule.endTime.split(':').map(Number);
+                    const startTotalMinutes = startHour * 60 + startMinute;
+                    const endTotalMinutes = endHour * 60 + endMinute;
+
+                    // Determine schedule status
+                    const isWithinSchedule = currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes;
+                    const isAfterSchedule = currentTotalMinutes >= endTotalMinutes;
+                    const isBeforeSchedule = currentTotalMinutes < startTotalMinutes;
+                    
                     // Update local state first
                     setDoctorAvailability(updatedAvailability);
                     setIsOnline(true);
                     
-                    // Save to database
-                    await saveAvailabilityToDatabase(updatedAvailability);
+                    // Save to both database collections
+                    const saveResult = await saveBothToDatabase(
+                      {
+                        startTime: updatedAvailability.dailySchedule.startTime,
+                        endTime: updatedAvailability.dailySchedule.endTime
+                      },
+                      updatedAvailability
+                    );
+
+                    if (!saveResult.success) {
+                      throw new Error(saveResult.error);
+                    }
                     
                     // Set that the doctor has now configured their availability
                     setHasSetAvailability(true);
+                    setHasScheduleToday(true);
+                    setJustSubmittedSchedule(true);
                     
                     // Reset schedule expiry flags when new schedule is set
                     setScheduleExpired(false);
                     setShowExtensionPrompt(false);
                     setShowScheduleExpiredModal(false);
                     
-                    // Success - redirect to overview
-                    Swal.fire({
+                    // Show success message first
+                    await Swal.fire({
                       title: 'Success!',
-                      text: 'You are now available! Your details have been saved successfully.',
+                      text: 'Your availability schedule has been saved successfully.',
                       icon: 'success',
                       confirmButtonColor: '#10b981',
                       timer: 1500,
                       showConfirmButton: false
                     });
-                    
-                    // Redirect to overview after state is updated
-                    setTimeout(() => {
+
+                    // Now show appropriate modal based on current time vs schedule
+                    if (isWithinSchedule) {
+                      // Currently within schedule time - show "Schedule Started" modal
+                      setShowScheduleStartModal(true);
+                    } else if (isAfterSchedule) {
+                      // Current time is after schedule end - show "Schedule Ended" modal
+                      setShowScheduleExpiredModal(true);
+                    } else {
+                      // Before schedule time - just redirect to overview
                       setActiveTab('overview');
-                    }, 1600);
+                    }
+                    
+                    // Reset the just submitted flag after a delay
+                    setTimeout(() => {
+                      setJustSubmittedSchedule(false);
+                    }, 3000);
                     
                   } catch (error) {
-                    console.error('Error saving availability:', error);
+                    console.error('Error saving availability and schedule:', error);
+                    
+                    // Rollback local state if database save failed
+                    setDoctorAvailability(prev => ({
+                      ...prev,
+                      isAvailable: false,
+                      dailySchedule: {
+                        ...prev.dailySchedule,
+                        isActive: false
+                      }
+                    }));
+                    setIsOnline(false);
+                    setJustSubmittedSchedule(false);
+                    
                     Swal.fire({
                       title: 'Error!',
-                      text: error.message || 'Failed to save availability details',
+                      text: error.message || 'Failed to save availability and schedule details. Please try again.',
                       icon: 'error',
                       confirmButtonColor: '#ef4444',
                       confirmButtonText: 'Try Again'
@@ -2001,7 +2914,7 @@ const DoctorDashboard = () => {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-3 text-3xl">🧠</span>
+                <CpuChipIcon className="mr-3 h-8 w-8 text-purple-600" />
                 AI Diagnosis Support
               </h2>
             </div>
@@ -2028,7 +2941,8 @@ const DoctorDashboard = () => {
                       />
                     </div>
                     <Button className="w-full bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700">
-                      🧠 Generate AI Analysis
+                      <CpuChipIcon className="mr-2 h-5 w-5" />
+                      Generate AI Analysis
                     </Button>
                   </div>
                 </div>
@@ -2038,13 +2952,16 @@ const DoctorDashboard = () => {
                 <div className="p-6">
                   <h3 className="text-lg font-bold text-gray-900 mb-4">AI Suggestions</h3>
                   <div className="bg-gradient-to-br from-blue-50 to-purple-50 p-4 rounded-xl mb-4">
-                    <h4 className="font-medium text-gray-900 mb-2">🤖 AI Analysis Result:</h4>
+                    <h4 className="font-medium text-gray-900 mb-2 flex items-center">
+                      <ComputerDesktopIcon className="mr-2 h-5 w-5 text-blue-600" />
+                      AI Analysis Result:
+                    </h4>
                     <p className="text-gray-700 text-sm mb-3">
                       Based on the symptoms provided, the AI suggests consideration of:
                     </p>
                     <ul className="space-y-2 text-sm">
                       <li className="flex items-center space-x-2">
-                        <span className="text-green-500">✓</span>
+                        <CheckCircleIcon className="h-5 w-5 text-green-500" />
                         <span>Viral Upper Respiratory Infection (85% confidence)</span>
                       </li>
                       <li className="flex items-center space-x-2">
@@ -2053,13 +2970,15 @@ const DoctorDashboard = () => {
                       </li>
                     </ul>
                     <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
-                      <p className="text-xs text-yellow-700">
-                        ⚠️ This is AI-generated suggestion only. Please use your professional judgment for final diagnosis.
+                      <p className="text-xs text-yellow-700 flex items-center">
+                        <ExclamationTriangleIcon className="h-4 w-4 mr-2" />
+                        This is AI-generated suggestion only. Please use your professional judgment for final diagnosis.
                       </p>
                     </div>
                   </div>
                   <Button variant="outline" className="w-full border-2 border-blue-200 text-blue-700 hover:bg-blue-50">
-                    💾 Save Analysis
+                    <ArchiveBoxIcon className="mr-2 h-5 w-5" />
+                    Save Analysis
                   </Button>
                 </div>
               </Card>
@@ -2072,14 +2991,14 @@ const DoctorDashboard = () => {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-3 text-3xl">💊</span>
+                <BeakerIcon className="mr-3 h-8 w-8 text-green-600" />
                 E-Prescription Generator
               </h2>
               <Button 
                 onClick={() => setShowPrescriptionModal(true)}
                 className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
               >
-                <span className="mr-2">➕</span>
+                <PlusIcon className="mr-2 h-5 w-5" />
                 New Prescription
               </Button>
             </div>
@@ -2146,20 +3065,24 @@ const DoctorDashboard = () => {
                       />
                     </div>
                     <div className="bg-blue-50 p-4 rounded-lg">
-                      <h4 className="font-medium text-blue-900 mb-2">🤖 AI Suggestions:</h4>
+                      <h4 className="font-medium text-blue-900 mb-2 flex items-center">
+                        <ComputerDesktopIcon className="mr-2 h-5 w-5 text-blue-600" />
+                        AI Suggestions:
+                      </h4>
                       <div className="space-y-2 text-sm">
                         <div className="flex items-center space-x-2">
-                          <span className="text-green-500">✓</span>
+                          <CheckCircleIcon className="h-5 w-5 text-green-500" />
                           <span>Amoxicillin 500mg - Common for respiratory infections</span>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="text-green-500">✓</span>
+                          <CheckCircleIcon className="h-5 w-5 text-green-500" />
                           <span>Ibuprofen 400mg - For pain and inflammation</span>
                         </div>
                       </div>
                     </div>
                     <Button className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700">
-                      💾 Generate & Send Prescription
+                      <ArchiveBoxIcon className="mr-2 h-5 w-5" />
+                      Generate & Send Prescription
                     </Button>
                   </div>
                 </div>
@@ -2173,7 +3096,7 @@ const DoctorDashboard = () => {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-3 text-3xl">💬</span>
+                <ChatBubbleLeftIcon className="mr-3 h-8 w-8 text-blue-600" />
                 Live Chat with Patients
               </h2>
               <div className="text-sm text-gray-500">
@@ -2223,7 +3146,7 @@ const DoctorDashboard = () => {
                     ))}
                     {chatMessages.length === 0 && (
                       <div className="text-center text-gray-500 py-6 sm:py-8">
-                        <div className="text-3xl sm:text-4xl mb-2">💬</div>
+                        <ChatBubbleLeftIcon className="h-8 w-8 sm:h-10 sm:w-10 mb-2 text-blue-600" />
                         <div className="text-sm sm:text-base">Select a patient to start chatting</div>
                       </div>
                     )}
@@ -2252,11 +3175,313 @@ const DoctorDashboard = () => {
           </div>
         );
 
+      case 'upcoming-schedules':
+        return (
+          <div className="space-y-8">
+            {/* Header Section */}
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-4 sm:space-y-0">
+              <div>
+                <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 flex items-center">
+                  <ClockIcon className="w-8 h-8 mr-3 text-emerald-600" />
+                  Set Your Schedules
+                </h2>
+                <p className="text-gray-600 mt-2">Manage your upcoming availability and work schedules</p>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-sm font-medium">
+                  {selectedDates.length} Date{selectedDates.length !== 1 ? 's' : ''} Selected
+                </div>
+              </div>
+            </div>
+
+            {/* Instructions Card */}
+            <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 shadow-lg">
+              <div className="p-6">
+                <div className="flex items-start space-x-3">
+                  <LightBulbIcon className="w-6 h-6 text-blue-500 mt-1 flex-shrink-0" />
+                  <div>
+                    <h3 className="text-lg font-semibold text-blue-900 mb-2">How to set your schedules:</h3>
+                    <ul className="text-blue-700 space-y-1 text-sm">
+                      <li>• Select dates on the calendar to create schedules</li>
+                      <li>• Choose to use the same times for all dates or set custom times for each day</li>
+                      <li>• Green dots indicate dates that already have schedules</li>
+                      <li>• Purple dots indicate completed schedules from the past</li>
+                      <li>• You can overwrite existing schedules by selecting those dates</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* Main Content */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+              {/* Calendar Section */}
+              <div className="xl:col-span-2">
+                <Card className="bg-white shadow-xl border-0">
+                  <div className="p-6">
+                    <h3 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                      <CalendarDaysIcon className="w-6 h-6 mr-2 text-blue-500" />
+                      Select Dates
+                    </h3>
+                    <Calendar
+                      selectedDates={selectedDates}
+                      onDateSelect={handleDateSelect}
+                      minDate={new Date()}
+                      maxDate={new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)} // 90 days from now
+                      multiSelect={true}
+                      existingSchedules={existingSchedules}
+                      completedSchedules={completedSchedules}
+                    />
+                  </div>
+                </Card>
+              </div>
+
+              {/* Schedule Configuration Section */}
+              <div className="space-y-6">
+                <Card className="bg-white shadow-xl border-0">
+                  <div className="p-6">
+                    <h3 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                      <Cog6ToothIcon className="w-6 h-6 mr-2 text-green-500" />
+                      Configure Times
+                    </h3>
+
+                    {/* Schedule Mode Selection */}
+                    <div className="space-y-4 mb-6">
+                      <label className="text-sm font-medium text-gray-700">Schedule Mode</label>
+                      <div className="space-y-3">
+                        <label className="flex items-start space-x-3 cursor-pointer p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors">
+                          <input
+                            type="radio"
+                            name="scheduleMode"
+                            value="same"
+                            checked={scheduleMode === 'same'}
+                            onChange={(e) => handleScheduleModeChange(e.target.value)}
+                            className="mt-0.5 w-4 h-4 text-blue-600"
+                          />
+                          <div>
+                            <span className="text-sm font-medium text-gray-900">Same times for all dates</span>
+                            <p className="text-xs text-gray-500 mt-1">Apply identical schedule to all selected dates</p>
+                          </div>
+                        </label>
+                        <label className="flex items-start space-x-3 cursor-pointer p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors">
+                          <input
+                            type="radio"
+                            name="scheduleMode"
+                            value="custom"
+                            checked={scheduleMode === 'custom'}
+                            onChange={(e) => handleScheduleModeChange(e.target.value)}
+                            className="mt-0.5 w-4 h-4 text-blue-600"
+                          />
+                          <div>
+                            <span className="text-sm font-medium text-gray-900">Custom times for each date</span>
+                            <p className="text-xs text-gray-500 mt-1">Set individual times for each selected date</p>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Default Times - Only show when same mode is selected */}
+                    {scheduleMode === 'same' && (
+                      <div className="space-y-4 mb-6">
+                        <label className="text-sm font-medium text-gray-700">
+                          Schedule Times
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-2">Start Time</label>
+                            <input
+                              type="time"
+                              value={defaultTimes.startTime}
+                              onChange={(e) => handleDefaultTimesChange('startTime', e.target.value)}
+                              className={getTimeInputStyling(defaultTimes.startTime, defaultTimes.endTime, false)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-2">End Time</label>
+                            <input
+                              type="time"
+                              value={defaultTimes.endTime}
+                              onChange={(e) => handleDefaultTimesChange('endTime', e.target.value)}
+                              className={getTimeInputStyling(defaultTimes.startTime, defaultTimes.endTime, true)}
+                            />
+                          </div>
+                        </div>
+                        {getTimeValidationMessage(defaultTimes.startTime, defaultTimes.endTime) && (
+                          <div className="text-red-600 text-xs mt-2 flex items-center">
+                            <ExclamationTriangleIcon className="w-4 h-4 mr-1" />
+                            {getTimeValidationMessage(defaultTimes.startTime, defaultTimes.endTime)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Custom Times for Each Date - Inline */}
+                    {scheduleMode === 'custom' && selectedDates.length > 0 && (
+                      <div className="space-y-4 mb-6">
+                        <label className="text-sm font-medium text-gray-700 flex items-center">
+                          <ClockIcon className="w-4 h-4 mr-2 text-purple-500" />
+                          Custom Times for Each Date
+                        </label>
+                        <div className="space-y-3 max-h-80 overflow-y-auto">
+                          {selectedDates.map((date, index) => {
+                            const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+                            const customSchedule = customSchedules[dateStr] || { startTime: defaultTimes.startTime, endTime: defaultTimes.endTime };
+                            
+                            return (
+                              <div key={dateStr} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                <div className="text-sm font-semibold text-gray-900 mb-3">
+                                  {new Date(dateStr).toLocaleDateString('en-US', { 
+                                    weekday: 'long', 
+                                    year: 'numeric', 
+                                    month: 'long', 
+                                    day: 'numeric' 
+                                  })}
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-500 mb-1">Start Time</label>
+                                    <input
+                                      type="time"
+                                      value={customSchedule.startTime}
+                                      onChange={(e) => handleCustomScheduleChange(dateStr, 'startTime', e.target.value)}
+                                      className={getTimeInputStyling(customSchedule.startTime, customSchedule.endTime, false)}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-500 mb-1">End Time</label>
+                                    <input
+                                      type="time"
+                                      value={customSchedule.endTime}
+                                      onChange={(e) => handleCustomScheduleChange(dateStr, 'endTime', e.target.value)}
+                                      className={getTimeInputStyling(customSchedule.startTime, customSchedule.endTime, true)}
+                                    />
+                                  </div>
+                                </div>
+                                {getTimeValidationMessage(customSchedule.startTime, customSchedule.endTime) && (
+                                  <div className="text-red-600 text-xs mt-2 flex items-center">
+                                    <ExclamationTriangleIcon className="w-4 h-4 mr-1" />
+                                    {getTimeValidationMessage(customSchedule.startTime, customSchedule.endTime)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Selected Dates Summary */}
+                    {selectedDates.length > 0 && (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+                        <div className="text-sm font-medium text-emerald-800 mb-2">
+                          Selected Dates ({selectedDates.length})
+                        </div>
+                        <div className="text-xs text-emerald-600 space-y-1 max-h-24 overflow-y-auto">
+                          {selectedDates.slice(0, 8).map((date, index) => {
+                            const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+                            return (
+                              <div key={dateStr} className="flex justify-between items-center">
+                                <span>
+                                  {new Date(dateStr).toLocaleDateString('en-US', { 
+                                    weekday: 'short', 
+                                    month: 'short', 
+                                    day: 'numeric' 
+                                  })}
+                                </span>
+                                {existingSchedules[dateStr] && (
+                                  <span className="text-xs bg-green-200 text-green-700 px-2 py-0.5 rounded-full">
+                                    Has Schedule
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {selectedDates.length > 8 && (
+                            <div className="text-emerald-500 text-center pt-1 border-t border-emerald-200">
+                              ... and {selectedDates.length - 8} more
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Save Button */}
+                    <div className="mt-6">
+                      <Button
+                        onClick={handleSaveUpcomingSchedules}
+                        disabled={scheduleLoading || selectedDates.length === 0}
+                        className="w-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-lg hover:shadow-xl transition-all duration-300"
+                        size="lg"
+                      >
+                        {scheduleLoading ? (
+                          <>
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                            Saving Schedules...
+                          </>
+                        ) : (
+                          <>
+                            <SparklesIcon className="w-5 h-5 mr-2" />
+                            Save {selectedDates.length} Schedule{selectedDates.length !== 1 ? 's' : ''}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            </div>
+
+            {/* Current Upcoming Schedules */}
+            {upcomingSchedules.length > 0 && (
+              <Card className="bg-white shadow-xl border-0">
+                <div className="p-6">
+                  <h3 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                    <ArchiveBoxIcon className="w-6 h-6 mr-2 text-purple-500" />
+                    Current Upcoming Schedules
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 max-h-80 overflow-y-auto">
+                    {upcomingSchedules.map((schedule) => (
+                      <div key={schedule._id} className="bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow">
+                        <div className="flex justify-between items-start mb-3">
+                          <div className="text-sm font-semibold text-gray-900">
+                            {new Date(schedule.date).toLocaleDateString('en-US', { 
+                              weekday: 'short', 
+                              month: 'short', 
+                              day: 'numeric',
+                              year: 'numeric'
+                            })}
+                          </div>
+                          <button
+                            onClick={() => handleDeleteUpcomingSchedule(schedule._id, new Date(schedule.date).toLocaleDateString())}
+                            className="text-red-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors"
+                            title="Delete schedule"
+                          >
+                            <XMarkIcon className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="text-xs text-gray-600 space-y-1">
+                          <div className="flex items-center space-x-1">
+                            <ClockIcon className="w-3 h-3" />
+                            <span>{schedule.startTime} - {schedule.endTime}</span>
+                          </div>
+                          <div className="inline-flex px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                            Active
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+        );
+
       default:
         return (
           <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl">
             <div className="text-center py-12">
-              <div className="text-6xl mb-4">🚧</div>
+              <ExclamationTriangleIcon className="h-16 w-16 mb-4 text-yellow-600" />
               <h3 className="text-xl font-semibold text-gray-900 mb-2">Feature Coming Soon</h3>
               <p className="text-gray-600">This feature is under development and will be available soon.</p>
             </div>
@@ -2472,21 +3697,21 @@ const DoctorDashboard = () => {
                     className={`
                       w-full flex items-center px-4 py-3 rounded-xl text-left
                       transition-all duration-200 group relative overflow-hidden
-                      ${isActive 
+                      ${activeTab === item.id
                         ? 'bg-gradient-to-r from-green-50 to-blue-50 text-green-700 shadow-md' 
                         : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                       }
                     `}
                   >
                     {/* Active indicator */}
-                    {isActive && (
+                    {activeTab === item.id && (
                       <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-green-500 to-blue-600 rounded-r-full" />
                     )}
                     
                     {/* Icon */}
                     <div className={`
                       p-2 rounded-lg mr-3 transition-all duration-200
-                      ${isActive 
+                      ${activeTab === item.id
                         ? `bg-gradient-to-r ${item.gradient} text-white shadow-lg` 
                         : 'bg-gray-100 group-hover:bg-gray-200'
                       }
@@ -2562,8 +3787,8 @@ const DoctorDashboard = () => {
         {selectedPatient && (
           <div className="space-y-6">
             <div className="flex items-center space-x-4">
-              <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-3xl">
-                {selectedPatient.avatar}
+              <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white">
+                <UserIcon className="h-10 w-10" />
               </div>
               <div>
                 <h3 className="text-2xl font-bold text-gray-900">{selectedPatient.name}</h3>
@@ -2609,75 +3834,13 @@ const DoctorDashboard = () => {
                 onClick={() => setActiveTab('prescriptions')}
                 className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
               >
-                💊 Write Prescription
+                <BeakerIcon className="mr-2 h-5 w-5" />
+                Write Prescription
               </Button>
-              <Button variant="outline">📊 View Vitals History</Button>
-              <Button variant="outline" onClick={() => setShowPatientModal(false)}>Close</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* Patient Profile Modal */}
-      <Modal
-        isOpen={showPatientModal}
-        onClose={() => setShowPatientModal(false)}
-        title="Patient Profile"
-        size="lg"
-      >
-        {selectedPatient && (
-          <div className="space-y-6">
-            <div className="flex items-center space-x-4">
-              <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-3xl">
-                {selectedPatient.avatar}
-              </div>
-              <div>
-                <h3 className="text-2xl font-bold text-gray-900">{selectedPatient.name}</h3>
-                <p className="text-gray-600">{selectedPatient.age} years • {selectedPatient.gender}</p>
-                <p className="text-sm text-gray-500">Patient ID: {selectedPatient.id}</p>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <h4 className="font-semibold text-gray-900">Medical Information</h4>
-                <div className="bg-red-50 p-4 rounded-lg">
-                  <div className="text-sm text-red-600">Current Condition</div>
-                  <div className="font-medium text-red-700">{selectedPatient.condition}</div>
-                </div>
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <div className="text-sm text-blue-600">Last Visit</div>
-                  <div className="font-medium text-blue-700">{selectedPatient.lastVisit}</div>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <h4 className="font-semibold text-gray-900">Current Vitals</h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">Blood Pressure</span>
-                    <span className="font-medium">{selectedPatient.vitals.bp}</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">Heart Rate</span>
-                    <span className="font-medium">{selectedPatient.vitals.hr}</span>
-                  </div>
-                  <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">Temperature</span>
-                    <span className="font-medium">{selectedPatient.vitals.temp}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex space-x-3">
-              <Button 
-                onClick={() => setActiveTab('prescriptions')}
-                className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-              >
-                💊 Write Prescription
+              <Button variant="outline">
+                <ChartBarIcon className="mr-2 h-5 w-5" />
+                View Vitals History
               </Button>
-              <Button variant="outline">📊 View Vitals History</Button>
               <Button variant="outline" onClick={() => setShowPatientModal(false)}>Close</Button>
             </div>
           </div>
@@ -2729,7 +3892,8 @@ const DoctorDashboard = () => {
             <Button 
               className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
             >
-              💊 Generate Prescription
+              <BeakerIcon className="mr-2 h-5 w-5" />
+              Generate Prescription
             </Button>
             <Button variant="outline" onClick={() => setShowPrescriptionModal(false)}>Cancel</Button>
           </div>
@@ -2753,18 +3917,18 @@ const DoctorDashboard = () => {
                   }}
                   className={`
                     flex flex-col items-center justify-center py-2 px-1 rounded-lg
-                    transition-all duration-200 min-h-[60px]
-                    ${isActive 
+                    transition-all duration-200 min-h-[60px] relative
+                    ${activeTab === item.id
                       ? 'text-green-600 bg-green-50' 
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
                     }
                   `}
                 >
-                  <IconComponent className={`w-5 h-5 mb-1 ${isActive ? 'text-green-600' : 'text-gray-500'}`} />
-                  <span className={`text-xs font-medium truncate ${isActive ? 'text-green-600' : 'text-gray-700'}`}>
+                  <IconComponent className={`w-5 h-5 mb-1 ${activeTab === item.id ? 'text-green-600' : 'text-gray-500'}`} />
+                  <span className={`text-xs font-medium truncate ${activeTab === item.id ? 'text-green-600' : 'text-gray-700'}`}>
                     {item.label}
                   </span>
-                  {isActive && (
+                  {activeTab === item.id && (
                     <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-8 h-1 bg-green-600 rounded-t-full" />
                   )}
                 </button>
@@ -2866,7 +4030,8 @@ const DoctorDashboard = () => {
             {/* Info note */}
             <div className="mt-6 p-4 bg-blue-50 rounded-2xl border border-blue-200">
               <p className="text-sm text-blue-700 text-center font-medium">
-                💡 You can always adjust your schedule in the Availability section
+                <LightBulbIcon className="mr-2 h-5 w-5 text-blue-600" />
+                You can always adjust your schedule in the Availability section
               </p>
             </div>
           </div>
@@ -2883,7 +4048,10 @@ const DoctorDashboard = () => {
               <div className="w-20 h-20 bg-gradient-to-r from-green-500 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4 animate-bounce">
                 <ClockIcon className="w-10 h-10 text-white" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Schedule Started! 🎉</h2>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2 flex items-center">
+                <CheckCircleIcon className="mr-3 h-8 w-8 text-green-600" />
+                Schedule Started!
+              </h2>
               <p className="text-gray-600">
                 Your scheduled availability period has begun. You can now go online to start accepting appointments.
               </p>
@@ -2904,8 +4072,11 @@ const DoctorDashboard = () => {
               <Button
                 onClick={async () => {
                   setShowScheduleStartModal(false);
+                  setJustSubmittedSchedule(false);
                   // Go online immediately
                   handleGoOnline();
+                  // Navigate to overview
+                  setActiveTab('overview');
                 }}
                 className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white border-0 py-4 text-lg font-semibold transform hover:scale-[1.02] transition-all duration-300"
               >
@@ -2916,7 +4087,11 @@ const DoctorDashboard = () => {
               </Button>
               
               <Button
-                onClick={() => setShowScheduleStartModal(false)}
+                onClick={() => {
+                  setShowScheduleStartModal(false);
+                  setJustSubmittedSchedule(false);
+                  setActiveTab('overview');
+                }}
                 variant="outline"
                 className="w-full border-2 border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-all duration-300 transform hover:scale-[1.02] py-4 text-lg font-semibold"
               >
@@ -2927,7 +4102,8 @@ const DoctorDashboard = () => {
             {/* Info note */}
             <div className="mt-6 p-4 bg-blue-50 rounded-2xl border border-blue-200">
               <p className="text-sm text-blue-700 text-center font-medium">
-                ✨ Your patients can now see you're available for appointments
+                <SparklesIcon className="mr-2 h-5 w-5 text-green-600" />
+                Your patients can now see you're available for appointments
               </p>
             </div>
           </div>
@@ -2940,6 +4116,7 @@ const DoctorDashboard = () => {
         onClose={() => setShowConsultationFeeModal(false)}
         title={consultationFee.amount > 0 ? "Update Consultation Fee" : "Set Consultation Fee"}
         size="md"
+        backgroundBlur={true}
       >
         <div className="space-y-6">
           <div className="text-center">
@@ -3071,6 +4248,7 @@ const DoctorDashboard = () => {
         }}
         title="Consultation Fee Request Rejected"
         size="md"
+        backgroundBlur={true}
       >
         <div className="space-y-6">
           <div className="text-center">
@@ -3148,8 +4326,10 @@ const DoctorDashboard = () => {
             localStorage.setItem(`approval_shown_${approvalDetails._id}`, 'true');
           }
         }}
-        title="Consultation Fee Request Approved! 🎉"
+        title="Consultation Fee Request Approved!"
+        icon={<CheckCircleIcon className="h-6 w-6 text-green-600" />}
         size="md"
+        backgroundBlur={true}
       >
         <div className="space-y-6">
           <div className="text-center">
@@ -3208,6 +4388,155 @@ const DoctorDashboard = () => {
               className="bg-green-600 hover:bg-green-700 text-white px-8"
             >
               Got it, Thanks!
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Schedule Setup Modal */}
+      <Modal 
+        isOpen={showScheduleSetupModal && hasScheduleToday === false}
+        onClose={handleSkipScheduleSetup}
+        title="Set Your Daily Schedule"
+        size="md"
+        backgroundBlur={true}
+      >
+        <div className="space-y-6">
+          <div className="text-center">
+            <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-4">
+              <CalendarDaysIcon className="w-6 h-6 text-blue-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Set Your Schedule for Today
+            </h3>
+            <p className="text-sm text-gray-600">
+              Please set your availability schedule for today to start accepting patients. 
+              You can update this anytime during the day.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Start Time
+              </label>
+              <input
+                type="time"
+                value={scheduleSetup.startTime}
+                onChange={(e) => handleScheduleSetupChange('startTime', e.target.value)}
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                End Time
+              </label>
+              <input
+                type="time"
+                value={scheduleSetup.endTime}
+                onChange={(e) => handleScheduleSetupChange('endTime', e.target.value)}
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
+            </div>
+
+            {scheduleSetupError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <p className="text-sm text-red-600">{scheduleSetupError}</p>
+              </div>
+            )}
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <ClockIcon className="w-5 h-5 text-blue-600 mt-0.5" />
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-blue-800">
+                    <strong>Schedule Guidelines:</strong>
+                  </p>
+                  <ul className="text-sm text-blue-700 mt-1 space-y-1">
+                    <li>• Minimum schedule duration: 1 hour</li>
+                    <li>• You'll automatically go offline after end time</li>
+                    <li>• You can extend your schedule anytime during the day</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex space-x-3">
+            <Button
+              onClick={handleSkipScheduleSetup}
+              className="bg-gray-500 hover:bg-gray-600 text-white flex-1"
+            >
+              Skip for Now
+            </Button>
+            <Button
+              onClick={handleSubmitScheduleSetup}
+              className="bg-blue-600 hover:bg-blue-700 text-white flex-1"
+              disabled={!scheduleSetup.startTime || !scheduleSetup.endTime}
+            >
+              Set Schedule
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Go Online Confirmation Modal */}
+      <Modal 
+        isOpen={showGoOnlineModal}
+        onClose={handleGoOnlineCancel}
+        title={goOnlineModalData.title}
+        size="md"
+        backgroundBlur={true}
+      >
+        <div className="space-y-6">
+          <div className="text-center">
+            <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mb-4">
+              <PowerIcon className="w-6 h-6 text-green-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Ready to Go Online?
+            </h3>
+            <p className="text-sm text-gray-600">
+              {goOnlineModalData.message}
+            </p>
+          </div>
+
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <div className="flex items-start">
+              <div className="flex-shrink-0">
+                <div className="w-4 h-4 rounded-full bg-green-400 animate-pulse mt-0.5"></div>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-green-800">
+                  <strong>Going Online Means:</strong>
+                </p>
+                <ul className="text-sm text-green-700 mt-1 space-y-1">
+                  <li>• Patients can see you're available</li>
+                  <li>• You'll start receiving appointment requests</li>
+                  <li>• Your status will show as "Online & Available"</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex space-x-3">
+            <Button
+              onClick={handleGoOnlineCancel}
+              className="bg-gray-500 hover:bg-gray-600 text-white flex-1"
+            >
+              Stay Offline
+            </Button>
+            <Button
+              onClick={handleGoOnlineConfirm}
+              className="bg-green-600 hover:bg-green-700 text-white flex-1 flex items-center justify-center space-x-2"
+            >
+              <PowerIcon className="w-4 h-4" />
+              <span>Go Online Now</span>
             </Button>
           </div>
         </div>

@@ -6,7 +6,8 @@ const Modal = ({
   title, 
   children, 
   size = 'md',
-  className = '' 
+  className = '',
+  backgroundBlur = false
 }) => {
   // Handle escape key press
   useEffect(() => {
@@ -42,7 +43,11 @@ const Modal = ({
     <div className="fixed inset-0 z-[9999] overflow-y-auto">
       {/* Background overlay */}
       <div 
-        className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm transition-opacity"
+        className={`fixed inset-0 transition-opacity ${
+          backgroundBlur 
+            ? 'bg-white/20 backdrop-blur-md' 
+            : 'bg-black bg-opacity-50 backdrop-blur-sm'
+        }`}
         onClick={onClose}
       ></div>
 

@@ -49,6 +49,8 @@ const PatientDashboard = () => {
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDoctorsLoading, setIsDoctorsLoading] = useState(false);
+  const [doctorsError, setDoctorsError] = useState(null);
   const [user, setUser] = useState(null);
   const [availableDoctors, setAvailableDoctors] = useState([]);
   const [showBookingModal, setShowBookingModal] = useState(false);
@@ -100,6 +102,144 @@ const PatientDashboard = () => {
 
   const unreadCount = notifications.filter(notification => notification.unread).length;
 
+  // Helper functions
+  const getNextAvailableSlot = (scheduleInfo, availability) => {
+    // Prefer schedule info if available, otherwise fall back to availability
+    let startTime, isActive;
+    
+    if (scheduleInfo && scheduleInfo.isActive) {
+      startTime = scheduleInfo.startTime;
+      isActive = scheduleInfo.isActive;
+    } else if (availability?.dailySchedule?.isActive) {
+      startTime = availability.dailySchedule.startTime;
+      isActive = availability.dailySchedule.isActive;
+    } else {
+      return 'Not available today';
+    }
+    
+    if (!isActive || !startTime) {
+      return 'Not available today';
+    }
+    
+    const now = new Date();
+    const currentTime = now.toTimeString().slice(0, 5);
+    
+    if (currentTime < startTime) {
+      return `Today ${startTime}`;
+    } else {
+      return `Tomorrow ${startTime}`;
+    }
+  };
+
+  const getWorkingHours = (scheduleInfo, availability) => {
+    // Prefer schedule info if available, otherwise fall back to availability
+    let startTime, endTime, isActive;
+    
+    if (scheduleInfo && scheduleInfo.isActive) {
+      startTime = scheduleInfo.startTime;
+      endTime = scheduleInfo.endTime;
+      isActive = scheduleInfo.isActive;
+    } else if (availability?.dailySchedule?.isActive) {
+      startTime = availability.dailySchedule.startTime;
+      endTime = availability.dailySchedule.endTime;
+      isActive = availability.dailySchedule.isActive;
+    } else {
+      return { today: 'Unavailable' };
+    }
+    
+    if (!isActive || !startTime || !endTime) {
+      return { today: 'Unavailable' };
+    }
+    
+    return {
+      today: `${startTime} - ${endTime}`,
+      tomorrow: `${startTime} - ${endTime}` // For demo
+    };
+  };
+
+  const loadAvailableDoctors = async () => {
+    try {
+      setIsDoctorsLoading(true);
+      setDoctorsError(null);
+      
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      // Use the new daily availability endpoint
+      const response = await fetch('http://localhost:3001/api/users/doctors/available-daily', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Daily availability API response:', data); // Debug log
+      
+      const doctors = data.data?.doctors || [];
+      console.log('Extracted doctors with daily availability:', doctors); // Debug log
+      
+      if (!Array.isArray(doctors)) {
+        throw new Error('Invalid data format received from server');
+      }
+      
+      // Transform backend data to frontend format with enhanced daily availability info
+      const formattedDoctors = doctors.map((doctor, index) => {
+        console.log('Processing doctor with daily availability:', doctor); // Debug log
+        
+        // Get daily availability information
+        const dailyInfo = doctor.dailyAvailabilityInfo;
+        const availability = doctor.availability;
+        
+        return {
+          id: doctor._id,
+          name: `Dr. ${doctor.firstName || 'Unknown'} ${doctor.lastName || 'Doctor'}`,
+          specialty: doctor.specialization || 'General Practice',
+          rating: 4.5 + (Math.random() * 0.4), // Mock rating
+          nextAvailable: dailyInfo?.nextAvailableSlot || 'Not available',
+          color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][index % 4],
+          isAvailable: dailyInfo?.isCurrentlyAvailable || false,
+          availability: availability,
+          dailyAvailabilityInfo: dailyInfo, // Include the enhanced daily info
+          workingHours: {
+            today: dailyInfo?.todaySchedule ? 
+              `${dailyInfo.todaySchedule.startTime} - ${dailyInfo.todaySchedule.endTime}` : 
+              'Not available',
+            tomorrow: dailyInfo?.todaySchedule ? 
+              `${dailyInfo.todaySchedule.startTime} - ${dailyInfo.todaySchedule.endTime}` : 
+              'Not available'
+          },
+          email: doctor.email,
+          phone: doctor.phone || 'Not provided',
+          experience: doctor.experience || '5+ years',
+          verificationStatus: doctor.verificationStatus || 'verified',
+          // Enhanced daily schedule information
+          currentSchedule: dailyInfo?.todaySchedule,
+          breakTime: dailyInfo?.breakTime,
+          specialNotes: dailyInfo?.specialNotes,
+          lastUpdated: dailyInfo?.lastUpdated
+        };
+      });
+      
+      console.log('Formatted doctors with daily availability:', formattedDoctors); // Debug log
+      setAvailableDoctors(formattedDoctors);
+      
+    } catch (error) {
+      console.error('Error loading doctors with daily availability:', error);
+      setDoctorsError(error.message);
+      setAvailableDoctors([]);
+    } finally {
+      setIsDoctorsLoading(false);
+    }
+  };
+
   // Check authentication and role on component mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -147,70 +287,6 @@ const PatientDashboard = () => {
         navigate('/auth/signin');
         setIsLoading(false);
       }
-    };
-
-    const loadAvailableDoctors = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) return;
-
-        const response = await fetch('http://localhost:3001/api/users/doctors/available', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const doctors = data.data.doctors || [];
-          
-          // Transform backend data to frontend format
-          const formattedDoctors = doctors.map((doctor, index) => ({
-            id: doctor._id,
-            name: `Dr. ${doctor.firstName} ${doctor.lastName}`,
-            specialty: doctor.specialization || 'General Practice',
-            rating: 4.5 + (Math.random() * 0.4), // Mock rating
-            nextAvailable: getNextAvailableSlot(doctor.availability),
-            color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][index % 4],
-            isAvailable: doctor.availability?.isAvailable && doctor.availability?.dailySchedule?.isActive,
-            availability: doctor.availability,
-            workingHours: getWorkingHours(doctor.availability)
-          }));
-          
-          setAvailableDoctors(formattedDoctors);
-        }
-      } catch (error) {
-        console.error('Error loading available doctors:', error);
-        // Keep empty array if API fails
-        setAvailableDoctors([]);
-      }
-    };
-
-    const getNextAvailableSlot = (availability) => {
-      if (!availability?.dailySchedule?.isActive) {
-        return 'Not available today';
-      }
-      
-      const now = new Date();
-      const currentTime = now.toTimeString().slice(0, 5);
-      const startTime = availability.dailySchedule.startTime;
-      
-      if (currentTime < startTime) {
-        return `Today ${startTime}`;
-      } else {
-        return `Tomorrow ${startTime}`;
-      }
-    };
-
-    const getWorkingHours = (availability) => {
-      if (!availability?.dailySchedule?.isActive) {
-        return { today: 'Unavailable' };
-      }
-      
-      return {
-        today: `${availability.dailySchedule.startTime} - ${availability.dailySchedule.endTime}`,
-        tomorrow: `${availability.dailySchedule.startTime} - ${availability.dailySchedule.endTime}` // For demo
-      };
     };
 
     checkAuth();
@@ -748,7 +824,7 @@ const PatientDashboard = () => {
                 className="w-full sm:w-auto bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
                 onClick={() => {
                   // Show available doctors first or open booking with first available doctor
-                  const availableDocs = getAvailableDoctors();
+                  const availableDocs = availableDoctors;
                   if (availableDocs.length > 0) {
                     handleBookAppointment(availableDocs[0]);
                   } else {
@@ -772,12 +848,79 @@ const PatientDashboard = () => {
               {/* Available Doctors - Takes 2 columns on xl screens */}
               <Card className="xl:col-span-2 bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
                 <div className="p-4 sm:p-6">
-                  <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-4 sm:mb-6 flex items-center">
-                    <UserIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 text-blue-600" />
-                    Available Doctors ({getAvailableDoctors().length})
-                  </h3>
-                  <div className="space-y-3 sm:space-y-4">
-                    {getAvailableDoctors().map((doctor, index) => (
+                  <div className="flex items-center justify-between mb-4 sm:mb-6">
+                    <h3 className="text-base sm:text-lg font-bold text-gray-900 flex items-center">
+                      <UserIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 text-blue-600" />
+                      Available Doctors - Daily Schedule ({availableDoctors.length})
+                    </h3>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={loadAvailableDoctors}
+                      disabled={isDoctorsLoading}
+                      className="flex items-center space-x-2"
+                    >
+                      <svg
+                        className={`w-4 h-4 ${isDoctorsLoading ? 'animate-spin' : ''}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        />
+                      </svg>
+                      <span>{isDoctorsLoading ? 'Loading...' : 'Refresh'}</span>
+                    </Button>
+                  </div>
+                  
+                  {/* Error State */}
+                  {doctorsError && (
+                    <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                      <div className="flex items-center">
+                        <svg className="w-5 h-5 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p className="text-red-700 font-medium">Failed to load doctors</p>
+                      </div>
+                      <p className="text-red-600 text-sm mt-1">{doctorsError}</p>
+                      <Button
+                        size="sm"
+                        className="mt-2 bg-red-600 hover:bg-red-700"
+                        onClick={loadAvailableDoctors}
+                      >
+                        Try Again
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {/* Loading State */}
+                  {isDoctorsLoading && (
+                    <div className="space-y-4">
+                      {[1, 2, 3].map((index) => (
+                        <div key={index} className="animate-pulse">
+                          <div className="flex items-center space-x-4 p-4 border rounded-lg">
+                            <div className="w-12 h-12 bg-gray-300 rounded-full"></div>
+                            <div className="flex-1 space-y-2">
+                              <div className="h-4 bg-gray-300 rounded w-1/4"></div>
+                              <div className="h-3 bg-gray-300 rounded w-1/6"></div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-8 bg-gray-300 rounded w-20"></div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Doctors List */}
+                  {!isDoctorsLoading && !doctorsError && (
+                    <div className="space-y-3 sm:space-y-4">
+                    {availableDoctors.map((doctor, index) => (
                       <div key={doctor.id} className="relative overflow-hidden rounded-lg sm:rounded-xl bg-gradient-to-r from-white to-gray-50 p-4 sm:p-6 border border-gray-100 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                           
@@ -824,36 +967,58 @@ const PatientDashboard = () => {
                                 variant="outline"
                                 className="w-full sm:w-auto border-blue-300 text-blue-600 hover:bg-blue-50"
                                 onClick={() => {
-                                  // Show doctor's availability details with new daily structure
-                                  const availability = doctor.availability;
-                                  const workingHours = doctor.workingHours;
+                                  // Show doctor's daily availability details
+                                  const dailyInfo = doctor.dailyAvailabilityInfo;
+                                  const currentSchedule = doctor.currentSchedule;
+                                  const breakTime = doctor.breakTime;
                                   
-                                  let message = `${doctor.name}'s availability:\n\n`;
+                                  let message = `${doctor.name}'s Daily Availability:\n\n`;
                                   
-                                  if (availability?.dailySchedule?.isActive) {
-                                    message += `Today: Available ${availability.dailySchedule.startTime} - ${availability.dailySchedule.endTime}\n`;
-                                    if (availability.breakTime?.enabled) {
-                                      message += `Break: ${availability.breakTime.startTime} - ${availability.breakTime.endTime}\n`;
+                                  // Show current daily schedule
+                                  if (dailyInfo && dailyInfo.isCurrentlyAvailable) {
+                                    message += `� Current Status: AVAILABLE NOW\n\n`;
+                                    message += `📅 Today's Schedule:\n`;
+                                    message += `Hours: ${currentSchedule?.startTime || 'N/A'} - ${currentSchedule?.endTime || 'N/A'}\n`;
+                                    message += `Status: ${currentSchedule?.isActive ? 'Active' : 'Inactive'}\n\n`;
+                                    
+                                    if (breakTime?.enabled) {
+                                      message += `☕ Break Time:\n`;
+                                      message += `Break: ${breakTime.startTime} - ${breakTime.endTime}\n\n`;
                                     }
-                                    message += `Next available slot: ${doctor.nextAvailable}\n\n`;
+                                    
+                                    message += `⏰ Next Available Slot: ${doctor.nextAvailable}\n\n`;
+                                    
+                                    if (doctor.specialNotes) {
+                                      message += `� Special Notes: ${doctor.specialNotes}\n\n`;
+                                    }
+                                    
+                                    if (doctor.lastUpdated) {
+                                      message += `🔄 Last Updated: ${new Date(doctor.lastUpdated).toLocaleString()}\n`;
+                                    }
                                   } else {
-                                    message += `Today: Not available\n\n`;
+                                    message += `🔴 Current Status: NOT AVAILABLE\n\n`;
+                                    message += `The doctor is currently outside their daily schedule hours.\n`;
+                                    message += `Next available: ${doctor.nextAvailable}`;
                                   }
                                   
-                                  if (availability?.specialNotes) {
-                                    message += `Special Notes: ${availability.specialNotes}\n\n`;
-                                  }
-                                  
-                                  if (workingHours) {
-                                    message += `Working Hours:\n${Object.entries(workingHours).map(([day, hours]) => `${day.charAt(0).toUpperCase() + day.slice(1)}: ${hours}`).join('\n')}`;
-                                  }
+                                  message += `\n\n📞 Contact Information:\n`;
+                                  message += `Email: ${doctor.email}\n`;
+                                  message += `Phone: ${doctor.phone}\n`;
+                                  message += `Experience: ${doctor.experience}`;
                                   
                                   Swal.fire({
-                                    title: `${doctor.name}'s Schedule`,
+                                    title: `${doctor.name}'s Daily Schedule`,
                                     text: message,
-                                    icon: 'info',
+                                    icon: dailyInfo?.isCurrentlyAvailable ? 'success' : 'info',
                                     confirmButtonColor: '#3b82f6',
-                                    confirmButtonText: 'Book Appointment'
+                                    confirmButtonText: dailyInfo?.isCurrentlyAvailable ? 'Book Appointment' : 'OK',
+                                    customClass: {
+                                      content: 'text-left'
+                                    }
+                                  }).then((result) => {
+                                    if (result.isConfirmed && dailyInfo?.isCurrentlyAvailable) {
+                                      handleBookAppointment(doctor);
+                                    }
                                   });
                                 }}
                               >
@@ -867,7 +1032,7 @@ const PatientDashboard = () => {
                     ))}
                     
                     {/* Show message if no doctors are available */}
-                    {getAvailableDoctors().length === 0 && (
+                    {availableDoctors.length === 0 && !isDoctorsLoading && !doctorsError && (
                       <div className="text-center py-8">
                         <div className="text-gray-400 text-6xl mb-4">🏥</div>
                         <h4 className="text-lg font-semibold text-gray-600 mb-2">No doctors currently available</h4>
@@ -875,6 +1040,7 @@ const PatientDashboard = () => {
                       </div>
                     )}
                   </div>
+                  )}
                 </div>
               </Card>
 
@@ -1534,8 +1700,8 @@ const PatientDashboard = () => {
       {/* Mobile Bottom Navigation - Only visible on small screens */}
       {isMobile && (
         <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-lg z-40 lg:hidden">
-          <div className="grid grid-cols-4 gap-1 px-2 py-2">
-            {sidebarItems.slice(0, 4).map((item) => {
+          <div className="grid grid-cols-5 gap-1 px-2 py-2">
+            {sidebarItems.slice(0, 5).map((item) => {
               const IconComponent = item.icon;
               const isActive = activeTab === item.id;
               
