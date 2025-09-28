@@ -23,6 +23,9 @@ import {
   PlusIcon,
   PhoneIcon,
   EyeIcon,
+  MagnifyingGlassIcon,
+  FunnelIcon,
+  AdjustmentsHorizontalIcon,
   VideoCameraIcon,
   ClockIcon
 } from '@heroicons/react/24/outline';
@@ -61,8 +64,27 @@ const PatientDashboard = () => {
     reason: '',
     type: 'consultation'
   });
+  // Calendar state
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [scheduledDates, setScheduledDates] = useState([]);
+  const [selectedDateSchedules, setSelectedDateSchedules] = useState([]);
+  const [selectedDateDoctors, setSelectedDateDoctors] = useState([]);
+  const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
+  const [isLoadingDateDoctors, setIsLoadingDateDoctors] = useState(false);
+  const [dateDoctorsError, setDateDoctorsError] = useState(null);
+  const [upcomingAppointments, setUpcomingAppointments] = useState([]);
+  const [showQuickActions, setShowQuickActions] = useState(false);
+  
+  // Filter and search state for selected date doctors
+  const [doctorSearchTerm, setDoctorSearchTerm] = useState('');
+  const [selectedSpecialty, setSelectedSpecialty] = useState('');
+  const [showAllDoctors, setShowAllDoctors] = useState(false);
+  const [sortBy, setSortBy] = useState('name'); // name, specialty, slots
+  
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
+  const quickActionsRef = useRef(null);
 
   // Mock notifications data
   const notifications = [
@@ -101,6 +123,69 @@ const PatientDashboard = () => {
   ];
 
   const unreadCount = notifications.filter(notification => notification.unread).length;
+
+  // Doctor filtering and search functions
+  const getUniqueSpecialties = () => {
+    const specialties = selectedDateDoctors.map(doctor => doctor.specialty);
+    return [...new Set(specialties)].sort();
+  };
+
+  const getFilteredDoctors = () => {
+    let filtered = selectedDateDoctors.filter(doctor => {
+      const matchesSearch = doctorSearchTerm === '' || 
+        doctor.name.toLowerCase().includes(doctorSearchTerm.toLowerCase()) ||
+        doctor.specialty.toLowerCase().includes(doctorSearchTerm.toLowerCase());
+      
+      const matchesSpecialty = selectedSpecialty === '' || 
+        doctor.specialty === selectedSpecialty;
+      
+      return matchesSearch && matchesSpecialty;
+    });
+
+    // Apply sorting
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'name':
+          return a.name.localeCompare(b.name);
+        case 'specialty':
+          return a.specialty.localeCompare(b.specialty);
+        case 'slots':
+          return (b.availableTimes?.length || 0) - (a.availableTimes?.length || 0);
+        default:
+          return 0;
+      }
+    });
+
+    return filtered;
+  };
+
+  const getDisplayDoctors = () => {
+    const filtered = getFilteredDoctors();
+    return showAllDoctors ? filtered : filtered.slice(0, 3);
+  };
+
+  const clearFilters = () => {
+    setDoctorSearchTerm('');
+    setSelectedSpecialty('');
+    setSortBy('name');
+  };
+
+  const highlightSearchTerm = (text, searchTerm) => {
+    if (!searchTerm || !text) return text;
+    
+    const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    const parts = text.split(regex);
+    
+    return parts.map((part, index) => 
+      regex.test(part) ? (
+        <span key={index} className="bg-yellow-200 text-yellow-900 px-1 rounded">
+          {part}
+        </span>
+      ) : (
+        part
+      )
+    );
+  };
 
   // Helper functions
   const getNextAvailableSlot = (scheduleInfo, availability) => {
@@ -157,6 +242,123 @@ const PatientDashboard = () => {
     };
   };
 
+  // Fetch scheduled appointments from database
+  const fetchScheduledAppointments = async () => {
+    setIsLoadingSchedules(true);
+    try {
+      // TODO: Implement proper patient appointments endpoint
+      // Currently using placeholder data until appointment system is ready
+      console.log('Fetching scheduled appointments - using placeholder data');
+
+      // Placeholder appointments data
+      const placeholderAppointments = [
+        {
+          id: 1,
+          doctor: 'Dr. Sarah Johnson',
+          specialty: 'Cardiologist',
+          date: '2024-09-28',
+          time: '10:00 AM',
+          type: 'In-person',
+          avatar: null,
+          rating: 4.8,
+          status: 'scheduled'
+        },
+        {
+          id: 2,
+          doctor: 'Dr. Michael Chen',
+          specialty: 'Neurologist',
+          date: '2024-09-30',
+          time: '2:00 PM',
+          type: 'Video Call',
+          avatar: null,
+          rating: 4.9,
+          status: 'scheduled'
+        }
+      ];
+
+      setUpcomingAppointments(placeholderAppointments);
+
+      const placeholderSchedules = placeholderAppointments.map(appt => ({
+        date: appt.date,
+        hasSchedule: true,
+        doctorId: appt.id,
+        doctorName: appt.doctor,
+        time: appt.time,
+        times: [appt.time],
+        status: appt.status
+      }));
+
+      setScheduledDates(placeholderSchedules);
+    } catch (error) {
+      console.error('Error with appointments:', error);
+      setScheduledDates([]);
+      setUpcomingAppointments([]);
+    } finally {
+      setIsLoadingSchedules(false);
+    }
+  };
+
+  // Fetch doctors available for a specific date
+  const fetchDoctorsForDate = async (dateString) => {
+    setIsLoadingDateDoctors(true);
+    setDateDoctorsError(null);
+    try {
+      const response = await fetch(`http://localhost:3001/api/users/doctors/available-for-date?date=${dateString}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Doctors for date response:', data);
+
+      const doctors = data.data?.doctors || [];
+      const formattedDoctors = doctors.map((doctor, index) => {
+        const scheduleInfo = doctor.scheduleInfo || {};
+        
+        return {
+          id: doctor._id,
+          name: `Dr. ${doctor.firstName || 'Unknown'} ${doctor.lastName || 'Doctor'}`,
+          specialty: doctor.specialization || 'General Practice',
+          rating: 4.5 + (Math.random() * 0.4),
+          availableTimes: scheduleInfo.availableSlots || [],
+          totalSlots: scheduleInfo.totalSlots || 0,
+          isAvailableOnDate: doctor.isAvailableOnDate || false,
+          color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][index % 4],
+          email: doctor.email,
+          phone: doctor.phone || 'Not provided',
+          experience: doctor.experience || '5+ years',
+          consultationFee: doctor.consultationFee || 'Contact for pricing',
+          workingHours: doctor.workingHoursForDate || 'Not available',
+          scheduleDetails: {
+            date: scheduleInfo.date,
+            startTime: scheduleInfo.startTime,
+            endTime: scheduleInfo.endTime,
+            isActive: scheduleInfo.isActive
+          },
+          bio: `Experienced ${doctor.specialization || 'healthcare professional'} available for consultations.`,
+          avatar: doctor.profileImage || null,
+          status: data.isToday && scheduleInfo.startTime ? 'Available today' : 'Available on selected date'
+        };
+      });
+
+      setSelectedDateDoctors(formattedDoctors);
+      console.log(`Found ${formattedDoctors.length} doctors available for ${dateString}`);
+    } catch (error) {
+      console.error('Error fetching doctors for date:', error);
+      setDateDoctorsError(error.message || 'Failed to load doctors for this date');
+      setSelectedDateDoctors([]);
+    } finally {
+      setIsLoadingDateDoctors(false);
+    }
+  };
+
   const loadAvailableDoctors = async () => {
     try {
       setIsDoctorsLoading(true);
@@ -167,7 +369,7 @@ const PatientDashboard = () => {
         throw new Error('No authentication token found');
       }
 
-      // Use the new daily availability endpoint
+      // Fetch doctors from schedules collection using available doctors endpoint
       const response = await fetch('http://localhost:3001/api/users/doctors/available-daily', {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -181,58 +383,57 @@ const PatientDashboard = () => {
       }
 
       const data = await response.json();
-      console.log('Daily availability API response:', data); // Debug log
+      console.log('Available doctors API response:', data); // Debug log
       
       const doctors = data.data?.doctors || [];
-      console.log('Extracted doctors with daily availability:', doctors); // Debug log
+      console.log('Extracted doctors:', doctors); // Debug log
       
       if (!Array.isArray(doctors)) {
         throw new Error('Invalid data format received from server');
       }
       
-      // Transform backend data to frontend format with enhanced daily availability info
+      // Format doctors data for the UI
       const formattedDoctors = doctors.map((doctor, index) => {
-        console.log('Processing doctor with daily availability:', doctor); // Debug log
-        
-        // Get daily availability information
-        const dailyInfo = doctor.dailyAvailabilityInfo;
-        const availability = doctor.availability;
+        const availability = doctor.dailyAvailabilityInfo || {};
+        const schedule = availability.todaySchedule || {};
         
         return {
           id: doctor._id,
-          name: `Dr. ${doctor.firstName || 'Unknown'} ${doctor.lastName || 'Doctor'}`,
+          name: `Dr. ${doctor.firstName} ${doctor.lastName}`,
           specialty: doctor.specialization || 'General Practice',
           rating: 4.5 + (Math.random() * 0.4), // Mock rating
-          nextAvailable: dailyInfo?.nextAvailableSlot || 'Not available',
+          nextAvailable: availability.nextAvailableSlot || 'Check schedule',
           color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][index % 4],
-          isAvailable: dailyInfo?.isCurrentlyAvailable || false,
-          availability: availability,
-          dailyAvailabilityInfo: dailyInfo, // Include the enhanced daily info
-          workingHours: {
-            today: dailyInfo?.todaySchedule ? 
-              `${dailyInfo.todaySchedule.startTime} - ${dailyInfo.todaySchedule.endTime}` : 
-              'Not available',
-            tomorrow: dailyInfo?.todaySchedule ? 
-              `${dailyInfo.todaySchedule.startTime} - ${dailyInfo.todaySchedule.endTime}` : 
-              'Not available'
+          isAvailable: availability.isCurrentlyAvailable || true,
+          availability: [schedule.startTime, schedule.endTime].filter(Boolean),
+          currentSchedule: {
+            startTime: schedule.startTime,
+            endTime: schedule.endTime,
+            status: 'available'
           },
+          workingHours: {
+            today: schedule.startTime && schedule.endTime ? 
+              `${schedule.startTime} - ${schedule.endTime}` : 'Not available',
+            general: schedule.startTime && schedule.endTime ? 
+              `${schedule.startTime} - ${schedule.endTime}` : 'Flexible hours'
+          },
+          experience: `${Math.floor(Math.random() * 15) + 5} years`,
           email: doctor.email,
           phone: doctor.phone || 'Not provided',
-          experience: doctor.experience || '5+ years',
-          verificationStatus: doctor.verificationStatus || 'verified',
-          // Enhanced daily schedule information
-          currentSchedule: dailyInfo?.todaySchedule,
-          breakTime: dailyInfo?.breakTime,
-          specialNotes: dailyInfo?.specialNotes,
-          lastUpdated: dailyInfo?.lastUpdated
+          consultationFee: doctor.consultationFee || Math.floor(Math.random() * 50) + 50,
+          bio: `Experienced ${doctor.specialization || 'healthcare professional'} with expertise in providing quality medical care.`,
+          avatar: null, // Remove default emoji
+          status: availability.isCurrentlyAvailable ? 'online' : 'offline',
+          breakTime: availability.breakTime,
+          specialNotes: availability.specialNotes || ''
         };
       });
       
-      console.log('Formatted doctors with daily availability:', formattedDoctors); // Debug log
       setAvailableDoctors(formattedDoctors);
+      console.log('Formatted doctors:', formattedDoctors);
       
     } catch (error) {
-      console.error('Error loading doctors with daily availability:', error);
+      console.error('Error loading doctors from schedules:', error);
       setDoctorsError(error.message);
       setAvailableDoctors([]);
     } finally {
@@ -278,8 +479,14 @@ const PatientDashboard = () => {
         
         setUser(patientData);
         
-        // Load available doctors
+        // Load available doctors and scheduled appointments
         await loadAvailableDoctors();
+        await fetchScheduledAppointments();
+        
+        // Load today's doctor availability by default
+        const today = new Date();
+        const todayString = formatDateString(today);
+        await fetchDoctorsForDate(todayString);
         
         setIsLoading(false);
       } catch (error) {
@@ -314,6 +521,9 @@ const PatientDashboard = () => {
       if (profileRef.current && !profileRef.current.contains(event.target)) {
         setShowProfileDropdown(false);
       }
+      if (quickActionsRef.current && !quickActionsRef.current.contains(event.target)) {
+        setShowQuickActions(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -334,6 +544,31 @@ const PatientDashboard = () => {
 
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
+
+  // Handle escape key for floating menu
+  useEffect(() => {
+    const handleEscapeKey = (event) => {
+      if (event.key === 'Escape') {
+        setShowQuickActions(false);
+      }
+    };
+
+    if (showQuickActions) {
+      document.addEventListener('keydown', handleEscapeKey);
+      return () => document.removeEventListener('keydown', handleEscapeKey);
+    }
+  }, [showQuickActions]);
+
+  // Reset view when filters change
+  useEffect(() => {
+    setShowAllDoctors(false);
+  }, [doctorSearchTerm, selectedSpecialty]);
+
+  // Reset filters when date changes
+  useEffect(() => {
+    clearFilters();
+    setShowAllDoctors(false);
+  }, [selectedDate]);
 
   const onLogout = () => {
     Swal.fire({
@@ -360,31 +595,8 @@ const PatientDashboard = () => {
     });
   };
 
-  // Enhanced mock data with more details
-  const upcomingAppointments = [
-    { 
-      id: 1, 
-      doctor: 'Dr. Sarah Johnson', 
-      specialty: 'Cardiology', 
-      date: '2025-08-05', 
-      time: '10:30 AM', 
-      type: 'Video Call',
-      avatar: '👩‍⚕️',
-      rating: 4.9,
-      status: 'confirmed'
-    },
-    { 
-      id: 2, 
-      doctor: 'Dr. Michael Chen', 
-      specialty: 'General Medicine', 
-      date: '2025-08-08', 
-      time: '2:15 PM', 
-      type: 'In-person',
-      avatar: '👨‍⚕️',
-      rating: 4.8,
-      status: 'pending'
-    }
-  ];
+  // Enhanced mock data with more details - will be replaced by database data
+  // const upcomingAppointments will be populated from scheduledDates state
 
   const recentPrescriptions = [
     { 
@@ -413,7 +625,7 @@ const PatientDashboard = () => {
       title: 'Stay Hydrated', 
       content: 'Drink at least 8 glasses of water daily for optimal health and better circulation.',
       category: 'Wellness',
-      icon: '💧',
+      icon: 'water',
       readTime: '2 min read'
     },
     { 
@@ -421,7 +633,7 @@ const PatientDashboard = () => {
       title: 'Regular Exercise', 
       content: '30 minutes of moderate exercise can improve your cardiovascular health significantly.',
       category: 'Fitness',
-      icon: '🏃‍♂️',
+      icon: 'fitness',
       readTime: '3 min read'
     },
     { 
@@ -429,7 +641,7 @@ const PatientDashboard = () => {
       title: 'Balanced Diet', 
       content: 'Include fruits, vegetables, and whole grains in your daily meals for better nutrition.',
       category: 'Nutrition',
-      icon: '🥗',
+      icon: 'nutrition',
       readTime: '4 min read'
     }
   ];
@@ -441,9 +653,13 @@ const PatientDashboard = () => {
     { metric: 'Temperature', value: '98.6°F', status: 'normal', trend: 'stable', color: 'blue' }
   ];
 
-  // Filter only available doctors
+  // Filter doctors from schedules collection (all are available for booking)
   const getAvailableDoctors = () => {
-    return availableDoctors.filter(doctor => doctor.isAvailable);
+    // Since we're fetching from schedules, all doctors have active schedules and are bookable
+    return availableDoctors.filter(doctor => {
+      // Show all doctors from schedules collection as they all have active schedules
+      return doctor.currentSchedule && doctor.schedules && doctor.schedules.length > 0;
+    });
   };
 
   // Function to handle booking appointment
@@ -563,6 +779,179 @@ const PatientDashboard = () => {
     return slots;
   };
 
+  // Calendar helper functions
+  const getDaysInMonth = (date) => {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  };
+
+  const getFirstDayOfMonth = (date) => {
+    return new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+  };
+
+  const formatDateString = (date) => {
+    // Use local date values to avoid timezone conversion issues
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const isDateScheduled = (dateString) => {
+    return scheduledDates.some(schedule => schedule.date === dateString);
+  };
+
+  const getSchedulesForDate = (dateString) => {
+    return scheduledDates.filter(schedule => schedule.date === dateString);
+  };
+
+  const handleDateClick = async (date) => {
+    // Check if clicking the same date - if so, unselect and go back to today
+    if (date.toDateString() === selectedDate.toDateString()) {
+      const today = new Date();
+      // Set time to start of day to ensure consistent date comparison
+      today.setHours(0, 0, 0, 0);
+      setSelectedDate(today);
+      const todayString = formatDateString(today);
+      const todaySchedules = getSchedulesForDate(todayString);
+      setSelectedDateSchedules(todaySchedules);
+      
+      // Fetch doctors available for today
+      await fetchDoctorsForDate(todayString);
+      return;
+    }
+
+    // Select the new date
+    setSelectedDate(date);
+    const dateString = formatDateString(date);
+    const schedules = getSchedulesForDate(dateString);
+    setSelectedDateSchedules(schedules);
+    
+    // Fetch doctors available for this date without showing alerts
+    await fetchDoctorsForDate(dateString);
+  };
+
+  const renderCalendar = () => {
+    const daysInMonth = getDaysInMonth(calendarMonth);
+    const firstDay = getFirstDayOfMonth(calendarMonth);
+    const today = new Date();
+    // Set time to start of day to ensure consistent date comparison
+    today.setHours(0, 0, 0, 0);
+    
+    const days = [];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    
+    // Day headers
+    const dayHeaders = dayNames.map(day => (
+      <div key={day} className="text-xs font-semibold text-gray-500 p-2 text-center">
+        {day}
+      </div>
+    ));
+
+    // Empty cells for days before the first day of the month
+    for (let i = 0; i < firstDay; i++) {
+      days.push(<div key={`empty-${i}`} className="p-2"></div>);
+    }
+
+    // Days of the month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), day);
+      const dateString = formatDateString(date);
+      const isToday = date.toDateString() === today.toDateString();
+      const isSelected = date.toDateString() === selectedDate.toDateString();
+      const hasSchedule = isDateScheduled(dateString);
+      const isPast = date < today && !isToday;
+
+      days.push(
+        <button
+          key={day}
+          onClick={() => handleDateClick(date)}
+          disabled={isPast}
+          className={`
+            relative p-2 text-sm font-medium rounded-lg transition-all duration-200 
+            hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500
+            ${isToday ? 'bg-blue-500 text-white font-bold' : ''}
+            ${isSelected && !isToday ? 'bg-blue-100 text-blue-700 ring-2 ring-blue-300' : ''}
+            ${hasSchedule && !isToday && !isSelected ? 'bg-green-100 text-green-700 font-semibold' : ''}
+            ${isPast ? 'text-gray-300 cursor-not-allowed' : 'text-gray-700 hover:text-blue-700'}
+            ${!isPast && !isToday && !isSelected && !hasSchedule ? 'hover:bg-gray-50' : ''}
+          `}
+        >
+          {day}
+          {hasSchedule && (
+            <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full"></div>
+          )}
+          {isToday && (
+            <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-white rounded-full"></div>
+          )}
+        </button>
+      );
+    }
+
+    return (
+      <div className="bg-white rounded-lg border border-gray-200">
+        {/* Calendar Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+          <button
+            onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}
+            className="p-1 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <h3 className="text-lg font-semibold text-gray-900">
+            {calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          </h3>
+          <button
+            onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}
+            className="p-1 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+        
+        {/* Calendar Grid */}
+        <div className="p-2">
+          <div className="grid grid-cols-7 gap-1 mb-2">
+            {dayHeaders}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {days}
+          </div>
+        </div>
+        
+        {/* Legend */}
+        <div className="px-4 pb-4">
+          <div className="flex flex-wrap gap-4 text-xs">
+            <div className="flex items-center">
+              <div className="w-3 h-3 bg-blue-500 rounded-full mr-2"></div>
+              <span className="text-gray-600">Today</span>
+            </div>
+            <div className="flex items-center">
+              <div className="w-3 h-3 bg-green-100 border border-green-300 rounded-full mr-2 relative">
+                <div className="absolute top-0 right-0 w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+              </div>
+              <span className="text-gray-600">Has Schedule</span>
+            </div>
+            <div className="flex items-center">
+              <div className="w-3 h-3 bg-blue-100 border border-blue-300 rounded-full mr-2"></div>
+              <span className="text-gray-600">Selected</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Refresh calendar data
+  const refreshCalendarData = async () => {
+    await fetchScheduledAppointments();
+    const dateString = formatDateString(selectedDate);
+    await fetchDoctorsForDate(dateString);
+  };
+
   const sidebarItems = [
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-blue-600' },
     { id: 'symptom-checker', label: 'Symptom Checker', icon: BeakerIcon, gradient: 'from-green-500 to-green-600' },
@@ -667,8 +1056,8 @@ const PatientDashboard = () => {
                   </div>
                   <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">98%</div>
                   <div className="text-orange-100 text-xs sm:text-sm">Health Score</div>
-                  <div className="mt-2 sm:mt-3 text-xs bg-white/20 rounded-full px-2 sm:px-3 py-1 inline-block">
-                    Excellent ⭐
+                  <div className="mt-2 sm:mt-3 text-xs bg-white/20 rounded-full px-2 sm:px-3 py-1 flex items-center justify-center">
+                    Excellent <svg className="w-3 h-3 ml-1 text-yellow-200" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
                   </div>
                 </div>
               </Card>
@@ -677,7 +1066,9 @@ const PatientDashboard = () => {
             {/* Quick Actions - Enhanced Responsive Design */}
             <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 p-4 sm:p-6">
               <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6 flex items-center">
-                <span className="mr-2 sm:mr-3 text-xl sm:text-2xl">⚡</span>
+                <svg className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
                 Quick Actions
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -728,7 +1119,7 @@ const PatientDashboard = () => {
               <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl hover:shadow-2xl transition-all duration-300">
                 <div className="p-6">
                   <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                    <span className="mr-2 text-xl">🗓️</span>
+                    <CalendarDaysIcon className="w-5 h-5 mr-2 text-blue-600" />
                     Upcoming Appointments
                   </h3>
                   <div className="space-y-4">
@@ -737,13 +1128,13 @@ const PatientDashboard = () => {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-3">
                             <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-lg">
-                              {appointment.avatar}
+                              <UserIcon className="w-6 h-6" />
                             </div>
                             <div>
                               <div className="font-semibold text-gray-900">{appointment.doctor}</div>
                               <div className="text-sm text-gray-600">{appointment.specialty}</div>
                               <div className="flex items-center space-x-1 mt-1">
-                                <span className="text-yellow-400">⭐</span>
+                                <svg className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
                                 <span className="text-xs text-gray-500">{appointment.rating}</span>
                               </div>
                             </div>
@@ -772,7 +1163,7 @@ const PatientDashboard = () => {
               <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl hover:shadow-2xl transition-all duration-300">
                 <div className="p-6">
                   <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                    <span className="mr-2 text-xl">💊</span>
+                    <BeakerIcon className="w-5 h-5 mr-2 text-blue-600" />
                     Recent Prescriptions
                   </h3>
                   <div className="space-y-4">
@@ -813,280 +1204,814 @@ const PatientDashboard = () => {
 
       case 'appointments':
         return (
-          <div className="space-y-4 sm:space-y-6">
-            {/* Header Section - Responsive */}
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
-                <CalendarDaysIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-blue-600" />
-                Appointments
-              </h2>
-              <Button 
-                className="w-full sm:w-auto bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
-                onClick={() => {
-                  // Show available doctors first or open booking with first available doctor
-                  const availableDocs = availableDoctors;
-                  if (availableDocs.length > 0) {
-                    handleBookAppointment(availableDocs[0]);
-                  } else {
-                    Swal.fire({
-                      title: 'No Doctors Available',
-                      text: 'No doctors are currently available. Please check back later.',
-                      icon: 'info',
-                      confirmButtonColor: '#3b82f6'
-                    });
-                  }
-                }}
-              >
-                <PlusIcon className="w-4 h-4 mr-2" />
-                Book New Appointment
-              </Button>
+          <div className="space-y-6">
+            {/* Header Section with Enhanced Design */}
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 via-purple-600 to-indigo-700 p-6">
+              <div className="relative z-10">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+                  <div>
+                    <h2 className="text-2xl md:text-3xl font-bold text-white flex items-center">
+                      <CalendarDaysIcon className="w-8 h-8 mr-3 text-blue-200" />
+                      Appointment Management
+                    </h2>
+                    <p className="text-blue-100 mt-2">Book, manage, and track your healthcare appointments</p>
+                  </div>
+                  <Button 
+                    className="bg-white text-blue-600 hover:bg-blue-50 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-semibold px-6 py-3"
+                    onClick={() => {
+                      const availableDocs = availableDoctors;
+                      if (availableDocs.length > 0) {
+                        handleBookAppointment(availableDocs[0]);
+                      } else {
+                        Swal.fire({
+                          title: 'No Doctors Available',
+                          text: 'No doctors are currently available. Please check back later.',
+                          icon: 'info',
+                          confirmButtonColor: '#3b82f6'
+                        });
+                      }
+                    }}
+                  >
+                    <PlusIcon className="w-5 h-5 mr-2" />
+                    Book New Appointment
+                  </Button>
+                </div>
+              </div>
+              {/* Decorative elements */}
+              <div className="absolute -right-6 -top-6 w-32 h-32 bg-white/10 rounded-full blur-xl"></div>
+              <div className="absolute -left-6 -bottom-6 w-24 h-24 bg-white/5 rounded-full blur-2xl"></div>
             </div>
-            
-            {/* Main Content Grid - Enhanced Responsive */}
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
-              
-              {/* Available Doctors - Takes 2 columns on xl screens */}
-              <Card className="xl:col-span-2 bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="p-4 sm:p-6">
-                  <div className="flex items-center justify-between mb-4 sm:mb-6">
-                    <h3 className="text-base sm:text-lg font-bold text-gray-900 flex items-center">
-                      <UserIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 text-blue-600" />
-                      Available Doctors - Daily Schedule ({availableDoctors.length})
-                    </h3>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={loadAvailableDoctors}
-                      disabled={isDoctorsLoading}
-                      className="flex items-center space-x-2"
-                    >
-                      <svg
-                        className={`w-4 h-4 ${isDoctorsLoading ? 'animate-spin' : ''}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                      <span>{isDoctorsLoading ? 'Loading...' : 'Refresh'}</span>
-                    </Button>
-                  </div>
-                  
-                  {/* Error State */}
-                  {doctorsError && (
-                    <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                      <div className="flex items-center">
-                        <svg className="w-5 h-5 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <p className="text-red-700 font-medium">Failed to load doctors</p>
-                      </div>
-                      <p className="text-red-600 text-sm mt-1">{doctorsError}</p>
-                      <Button
-                        size="sm"
-                        className="mt-2 bg-red-600 hover:bg-red-700"
-                        onClick={loadAvailableDoctors}
-                      >
-                        Try Again
-                      </Button>
-                    </div>
-                  )}
-                  
-                  {/* Loading State */}
-                  {isDoctorsLoading && (
-                    <div className="space-y-4">
-                      {[1, 2, 3].map((index) => (
-                        <div key={index} className="animate-pulse">
-                          <div className="flex items-center space-x-4 p-4 border rounded-lg">
-                            <div className="w-12 h-12 bg-gray-300 rounded-full"></div>
-                            <div className="flex-1 space-y-2">
-                              <div className="h-4 bg-gray-300 rounded w-1/4"></div>
-                              <div className="h-3 bg-gray-300 rounded w-1/6"></div>
-                            </div>
-                            <div className="space-y-2">
-                              <div className="h-8 bg-gray-300 rounded w-20"></div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  
-                  {/* Doctors List */}
-                  {!isDoctorsLoading && !doctorsError && (
-                    <div className="space-y-3 sm:space-y-4">
-                    {availableDoctors.map((doctor, index) => (
-                      <div key={doctor.id} className="relative overflow-hidden rounded-lg sm:rounded-xl bg-gradient-to-r from-white to-gray-50 p-4 sm:p-6 border border-gray-100 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                          
-                          {/* Doctor Info */}
-                          <div className="flex items-center space-x-3 sm:space-x-4">
-                            <div className={`w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-r ${doctor.color} rounded-full flex items-center justify-center text-white shadow-lg flex-shrink-0 relative`}>
-                              <UserIcon className="w-6 h-6 sm:w-8 sm:h-8" />
-                              {/* Online indicator */}
-                              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-white rounded-full animate-pulse"></div>
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="font-bold text-base sm:text-lg text-gray-900 truncate">{doctor.name}</div>
-                              <div className="text-sm text-gray-600 font-medium">{doctor.specialty}</div>
-                              <div className="flex items-center space-x-1 mt-1">
-                                <span className="text-yellow-400 text-base sm:text-lg">⭐</span>
-                                <span className="text-sm font-semibold text-gray-700">{doctor.rating}</span>
-                                <span className="text-xs text-gray-500 hidden sm:inline">(125+ reviews)</span>
-                              </div>
-                              {/* Availability indicator */}
-                              <div className="flex items-center space-x-1 mt-1">
-                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                                <span className="text-xs text-green-600 font-medium">Available now</span>
-                              </div>
-                            </div>
-                          </div>
 
-                          {/* Appointment Info & Button */}
-                          <div className="flex flex-col sm:text-right space-y-2 sm:space-y-3">
-                            <div>
-                              <div className="text-xs text-gray-500 font-medium">Next available:</div>
-                              <div className="text-sm font-bold text-gray-800">{doctor.nextAvailable}</div>
-                            </div>
-                            <div className="flex flex-col sm:flex-row gap-2">
-                              <Button 
-                                size="sm" 
-                                className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-md hover:shadow-lg transition-all duration-300"
-                                onClick={() => handleBookAppointment(doctor)}
-                              >
-                                <PhoneIcon className="w-4 h-4 mr-1" />
-                                Book Now
-                              </Button>
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                className="w-full sm:w-auto border-blue-300 text-blue-600 hover:bg-blue-50"
-                                onClick={() => {
-                                  // Show doctor's daily availability details
-                                  const dailyInfo = doctor.dailyAvailabilityInfo;
-                                  const currentSchedule = doctor.currentSchedule;
-                                  const breakTime = doctor.breakTime;
-                                  
-                                  let message = `${doctor.name}'s Daily Availability:\n\n`;
-                                  
-                                  // Show current daily schedule
-                                  if (dailyInfo && dailyInfo.isCurrentlyAvailable) {
-                                    message += `� Current Status: AVAILABLE NOW\n\n`;
-                                    message += `📅 Today's Schedule:\n`;
-                                    message += `Hours: ${currentSchedule?.startTime || 'N/A'} - ${currentSchedule?.endTime || 'N/A'}\n`;
-                                    message += `Status: ${currentSchedule?.isActive ? 'Active' : 'Inactive'}\n\n`;
-                                    
-                                    if (breakTime?.enabled) {
-                                      message += `☕ Break Time:\n`;
-                                      message += `Break: ${breakTime.startTime} - ${breakTime.endTime}\n\n`;
-                                    }
-                                    
-                                    message += `⏰ Next Available Slot: ${doctor.nextAvailable}\n\n`;
-                                    
-                                    if (doctor.specialNotes) {
-                                      message += `� Special Notes: ${doctor.specialNotes}\n\n`;
-                                    }
-                                    
-                                    if (doctor.lastUpdated) {
-                                      message += `🔄 Last Updated: ${new Date(doctor.lastUpdated).toLocaleString()}\n`;
-                                    }
-                                  } else {
-                                    message += `🔴 Current Status: NOT AVAILABLE\n\n`;
-                                    message += `The doctor is currently outside their daily schedule hours.\n`;
-                                    message += `Next available: ${doctor.nextAvailable}`;
-                                  }
-                                  
-                                  message += `\n\n📞 Contact Information:\n`;
-                                  message += `Email: ${doctor.email}\n`;
-                                  message += `Phone: ${doctor.phone}\n`;
-                                  message += `Experience: ${doctor.experience}`;
-                                  
-                                  Swal.fire({
-                                    title: `${doctor.name}'s Daily Schedule`,
-                                    text: message,
-                                    icon: dailyInfo?.isCurrentlyAvailable ? 'success' : 'info',
-                                    confirmButtonColor: '#3b82f6',
-                                    confirmButtonText: dailyInfo?.isCurrentlyAvailable ? 'Book Appointment' : 'OK',
-                                    customClass: {
-                                      content: 'text-left'
-                                    }
-                                  }).then((result) => {
-                                    if (result.isConfirmed && dailyInfo?.isCurrentlyAvailable) {
-                                      handleBookAppointment(doctor);
-                                    }
-                                  });
-                                }}
-                              >
-                                <ClockIcon className="w-4 h-4 mr-1" />
-                                Schedule
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {/* Show message if no doctors are available */}
-                    {availableDoctors.length === 0 && !isDoctorsLoading && !doctorsError && (
-                      <div className="text-center py-8">
-                        <div className="text-gray-400 text-6xl mb-4">🏥</div>
-                        <h4 className="text-lg font-semibold text-gray-600 mb-2">No doctors currently available</h4>
-                        <p className="text-gray-500 text-sm">Please check back later or contact support for emergency care.</p>
-                      </div>
-                    )}
-                  </div>
-                  )}
+            {/* Quick Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-4 text-center">
+                  <CalendarDaysIcon className="w-8 h-8 mx-auto mb-2 text-emerald-200" />
+                  <div className="text-2xl font-bold">{upcomingAppointments.length}</div>
+                  <div className="text-emerald-100 text-sm">Upcoming</div>
                 </div>
               </Card>
+              <Card className="bg-gradient-to-br from-blue-500 to-blue-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-4 text-center">
+                  <UserIcon className="w-8 h-8 mx-auto mb-2 text-blue-200" />
+                  <div className="text-2xl font-bold">{availableDoctors.length}</div>
+                  <div className="text-blue-100 text-sm">Available Doctors</div>
+                </div>
+              </Card>
+              <Card className="bg-gradient-to-br from-purple-500 to-purple-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-4 text-center">
+                  <ClockIcon className="w-8 h-8 mx-auto mb-2 text-purple-200" />
+                  <div className="text-2xl font-bold">8</div>
+                  <div className="text-purple-100 text-sm">This Month</div>
+                </div>
+              </Card>
+              <Card className="bg-gradient-to-br from-orange-500 to-orange-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-4 text-center">
+                  <HeartIcon className="w-8 h-8 mx-auto mb-2 text-orange-200" />
+                  <div className="text-2xl font-bold">24</div>
+                  <div className="text-orange-100 text-sm">Completed</div>
+                </div>
+              </Card>
+            </div>
 
-              {/* Calendar/Quick Actions - Responsive Sidebar */}
-              <div className="space-y-4 sm:space-y-6">
+            {/* Main Content Grid - Redesigned Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Left Column - Calendar and Selected Date Info */}
+              <div className="lg:col-span-1 space-y-6">
                 
-                {/* Calendar View Card */}
-                <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
-                  <div className="p-4 sm:p-6">
-                    <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-4 flex items-center">
-                      <CalendarDaysIcon className="w-5 h-5 sm:w-6 sm:h-6 mr-2 text-blue-600" />
-                      Calendar View
-                    </h3>
-                    <div className="text-center py-6 sm:py-8">
-                      <CalendarDaysIcon className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 text-blue-600 animate-pulse" />
-                      <div className="text-gray-600 font-medium mb-2 text-sm sm:text-base">Interactive Calendar</div>
-                      <div className="text-xs sm:text-sm text-gray-500 mb-4 sm:mb-6">View your schedule at a glance</div>
-                      <Button 
-                        variant="outline" 
-                        className="w-full border-2 border-blue-200 text-blue-700 hover:bg-blue-50 transition-all duration-300"
-                      >
-                        <EyeIcon className="w-4 h-4 mr-2" />
-                        View Full Calendar
-                      </Button>
+                {/* Interactive Calendar */}
+                <Card className="bg-white/90 backdrop-blur-sm border-0 shadow-xl">
+                  <div className="p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-bold text-gray-900 flex items-center">
+                        <CalendarDaysIcon className="w-6 h-6 mr-2 text-blue-600" />
+                        Appointment Calendar
+                      </h3>
+                      {isLoadingSchedules && (
+                        <div className="flex items-center text-blue-600 text-sm">
+                          <svg className="animate-spin w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Loading...
+                        </div>
+                      )}
                     </div>
+                    {renderCalendar()}
                   </div>
                 </Card>
 
-                {/* Quick Stats Card */}
-                <Card className="bg-gradient-to-br from-blue-50 to-purple-50 border-0 shadow-lg">
-                  <div className="p-4 sm:p-6">
-                    <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-4">Quick Stats</h3>
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Upcoming</span>
-                        <span className="font-bold text-blue-600">3</span>
+                {/* Selected Date Information */}
+                <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-0 shadow-lg">
+                  <div className="p-6">
+                    <h4 className="font-bold text-gray-900 mb-4 flex items-center">
+                      <ClockIcon className="w-5 h-5 mr-2 text-blue-600" />
+                      Selected Date Details
+                    </h4>
+                    <div className="space-y-4">
+                      <div className="text-sm">
+                        <span className="text-gray-600">Selected Date:</span>
+                        <div className="font-semibold text-gray-900 mt-1">
+                          {selectedDate.toLocaleDateString('en-US', { 
+                            weekday: 'long', 
+                            year: 'numeric', 
+                            month: 'long', 
+                            day: 'numeric' 
+                          })}
+                        </div>
                       </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">This Month</span>
-                        <span className="font-bold text-green-600">8</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Completed</span>
-                        <span className="font-bold text-purple-600">24</span>
+                      
+                      {selectedDateSchedules.length > 0 ? (
+                        <div>
+                          <span className="text-gray-600 text-sm flex items-center"><DocumentTextIcon className="w-4 h-4 mr-1" />Scheduled Appointments:</span>
+                          <div className="mt-2 space-y-2">
+                            {selectedDateSchedules.map((schedule, index) => (
+                              <div key={index} className="bg-white rounded-lg p-3 border border-blue-200">
+                                <div className="font-semibold text-blue-900">{schedule.doctorName}</div>
+                                <div className="text-sm text-blue-700 flex items-center">
+                                  <ClockIcon className="w-4 h-4 mr-1" />{schedule.times ? schedule.times.join(', ') : schedule.time}
+                                </div>
+                                <div className="text-xs text-blue-600 mt-1">Status: {schedule.status}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-3">
+                          <CalendarDaysIcon className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                          <div className="text-gray-500 text-sm">No appointments scheduled</div>
+                        </div>
+                      )}
+
+                      {/* Available Doctors for Selected Date */}
+                      <div className="border-t border-blue-200 pt-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-gray-600 text-sm flex items-center"><UserIcon className="w-4 h-4 mr-1" />Available Doctors:</span>
+                          {isLoadingDateDoctors && (
+                            <div className="text-xs text-blue-600">Loading...</div>
+                          )}
+                        </div>
+                        
+                        {isLoadingDateDoctors ? (
+                          <div className="space-y-2">
+                            {[1, 2].map((index) => (
+                              <div key={index} className="animate-pulse">
+                                <div className="flex items-center space-x-3 p-2 bg-gray-100 rounded-lg">
+                                  <div className="w-8 h-8 bg-gray-300 rounded-full"></div>
+                                  <div className="flex-1 space-y-1">
+                                    <div className="h-3 bg-gray-300 rounded w-2/3"></div>
+                                    <div className="h-2 bg-gray-300 rounded w-1/2"></div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : selectedDateDoctors.length > 0 ? (
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {selectedDateDoctors.map((doctor, index) => (
+                              <div key={index} className="bg-white rounded-lg p-3 border border-green-200 hover:border-green-300 transition-colors">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-2">
+                                    <div className={`w-8 h-8 bg-gradient-to-r ${doctor.color} rounded-full flex items-center justify-center text-white text-xs`}>
+                                      <UserIcon className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                      <div className="font-semibold text-green-900 text-sm">{doctor.name}</div>
+                                      <div className="text-xs text-green-700">{doctor.specialty}</div>
+                                      <div className="text-xs text-green-600 flex items-center">
+                                        <svg className="w-3 h-3 mr-1 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
+                                        {doctor.rating.toFixed(1)}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    className="bg-green-500 hover:bg-green-600 text-white px-2 py-1 text-xs"
+                                    onClick={() => handleBookAppointment(doctor)}
+                                  >
+                                    Book
+                                  </Button>
+                                </div>
+                                {doctor.availableTimes && doctor.availableTimes.length > 0 && (
+                                  <div className="mt-2 pt-2 border-t border-green-100">
+                                    <div className="text-xs text-green-600 mb-1">Available Times:</div>
+                                    <div className="flex flex-wrap gap-1">
+                                      {doctor.availableTimes.slice(0, 3).map((time, timeIndex) => (
+                                        <span key={timeIndex} className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">
+                                          {time}
+                                        </span>
+                                      ))}
+                                      {doctor.availableTimes.length > 3 && (
+                                        <span className="text-xs text-green-600">
+                                          +{doctor.availableTimes.length - 3} more
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-3">
+                            <svg className="w-8 h-8 text-gray-400 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                            </svg>
+                            <div className="text-gray-500 text-xs">No doctors available</div>
+                            <div className="text-gray-400 text-xs mt-1">for this date</div>
+                          </div>
+                        )}
+                        
+                        
                       </div>
                     </div>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Floating Quick Actions Button */}
+              <div className={`fixed ${isMobile ? 'bottom-36 right-4' : 'bottom-28 right-8'} z-50`} ref={quickActionsRef}>
+                {/* Quick Actions Dropdown */}
+                {showQuickActions && (
+                  <div className="absolute bottom-16 right-0 w-72 bg-white rounded-2xl shadow-2xl border border-gray-100 transform transition-all duration-300 origin-bottom-right scale-100 animate-in slide-in-from-bottom-3 fade-in">
+                    <div className="p-5">
+                      <h4 className="font-bold text-gray-900 mb-4 flex items-center">
+                        <svg className="w-5 h-5 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Quick Actions
+                      </h4>
+                      <div className="space-y-2">
+                        <Button 
+                          variant="outline" 
+                          className="w-full justify-start text-left border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300 transition-all duration-200 text-sm py-2.5"
+                          onClick={() => {
+                            setActiveTab('overview');
+                            setShowQuickActions(false);
+                          }}
+                        >
+                          <EyeIcon className="w-4 h-4 mr-3" />
+                          View Dashboard
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          className="w-full justify-start text-left border-blue-200 text-blue-700 hover:bg-blue-50 hover:border-blue-300 transition-all duration-200 text-sm py-2.5"
+                          onClick={() => {
+                            setShowQuickActions(false);
+                            Swal.fire({
+                              title: 'Upcoming Appointments',
+                              html: `
+                                <div class="text-left space-y-2">
+                                  ${upcomingAppointments.length > 0 ? 
+                                    upcomingAppointments.map(apt => 
+                                      `<div class="p-3 bg-gray-50 rounded-lg">
+                                        <strong>${apt.doctor}</strong><br>
+                                        <span class="text-gray-600">${apt.date} at ${apt.time}</span><br>
+                                        <span class="text-sm text-blue-600">${apt.type}</span>
+                                      </div>`
+                                    ).join('') :
+                                    '<div class="text-center text-gray-500">No upcoming appointments</div>'
+                                  }
+                                </div>
+                              `,
+                              icon: 'info',
+                              confirmButtonColor: '#3b82f6'
+                            });
+                          }}
+                        >
+                          <CalendarDaysIcon className="w-4 h-4 mr-3" />
+                          View All Appointments
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          className="w-full justify-start text-left border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-200 text-sm py-2.5"
+                          onClick={() => {
+                            setShowQuickActions(false);
+                            fetchDoctorsForDate(formatDateString(selectedDate));
+                          }}
+                          disabled={isLoadingDateDoctors}
+                        >
+                          <svg className={`w-4 h-4 mr-3 ${isLoadingDateDoctors ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          {isLoadingDateDoctors ? 'Refreshing...' : 'Refresh Doctors'}
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          className="w-full justify-start text-left border-indigo-200 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300 transition-all duration-200 text-sm py-2.5"
+                          onClick={() => {
+                            setShowQuickActions(false);
+                            refreshCalendarData();
+                          }}
+                          disabled={isLoadingSchedules || isLoadingDateDoctors}
+                        >
+                          <svg className={`w-4 h-4 mr-3 ${(isLoadingSchedules || isLoadingDateDoctors) ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          {(isLoadingSchedules || isLoadingDateDoctors) ? 'Updating...' : 'Refresh Calendar'}
+                        </Button>
+                        
+                        {/* Separator */}
+                        <div className="border-t border-gray-200 my-3"></div>
+                        
+                        {/* Primary Action */}
+                        <Button 
+                          className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg hover:shadow-xl transition-all duration-200 text-sm py-2.5 font-semibold"
+                          onClick={() => {
+                            setShowQuickActions(false);
+                            if (availableDoctors.length > 0) {
+                              handleBookAppointment(availableDoctors[0]);
+                            } else {
+                              Swal.fire({
+                                title: 'No Doctors Available',
+                                text: 'No doctors are currently available. Please check back later.',
+                                icon: 'info',
+                                confirmButtonColor: '#3b82f6'
+                              });
+                            }
+                          }}
+                        >
+                          <PlusIcon className="w-4 h-4 mr-3" />
+                          Book New Appointment
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Floating Action Button */}
+                <button
+                  onClick={() => setShowQuickActions(!showQuickActions)}
+                  className={`
+                    w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 
+                    text-white rounded-full shadow-2xl hover:shadow-3xl 
+                    transition-all duration-300 transform hover:scale-110 active:scale-95
+                    flex items-center justify-center group
+                    ${showQuickActions ? 'ring-4 ring-blue-200 ring-opacity-50' : ''}
+                  `}
+                  aria-label="Quick Actions"
+                >
+                  <svg 
+                    className={`w-7 h-7 transition-transform duration-300 ${showQuickActions ? 'rotate-45' : 'group-hover:rotate-90'}`} 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                  
+                  {/* Pulse animation when active */}
+                  {showQuickActions && (
+                    <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 animate-ping opacity-30"></div>
+                  )}
+                </button>
+              </div>
+
+              {/* Right Column - Available Doctors and Upcoming Appointments */}
+              <div className="lg:col-span-2 space-y-6">
+                
+                {/* Selected Date Doctors Section */}
+                <Card className="bg-gradient-to-r from-purple-50 to-indigo-50 backdrop-blur-sm shadow-xl border-2 border-purple-200">
+                  <div className="p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-xl font-bold text-purple-900 flex items-center">
+                        <CalendarDaysIcon className="w-6 h-6 mr-2 text-purple-600" />
+                        Doctors Available for {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ({selectedDateDoctors.length > 0 ? getFilteredDoctors().length : 0})
+                        </h3>
+                        <div className="flex items-center gap-3">
+                          <div className="text-sm text-purple-700 font-medium bg-purple-100 px-3 py-1 rounded-full">
+                            Selected Date
+                          </div>
+                          {(doctorSearchTerm || selectedSpecialty || sortBy !== 'name') && (
+                            <div className="flex items-center gap-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full">
+                              <FunnelIcon className="h-3 w-3" />
+                              Filtered
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Loading State */}
+                      {isLoadingDateDoctors ? (
+                        <div className="space-y-4">
+                          {[1, 2, 3].map((index) => (
+                            <div key={index} className="animate-pulse">
+                              <div className="flex items-center space-x-4 p-4 bg-white/50 rounded-lg">
+                                <div className="w-16 h-16 bg-gray-300 rounded-xl"></div>
+                                <div className="flex-1 space-y-2">
+                                  <div className="h-4 bg-gray-300 rounded w-1/3"></div>
+                                  <div className="h-3 bg-gray-300 rounded w-1/4"></div>
+                                  <div className="h-3 bg-gray-300 rounded w-1/2"></div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : dateDoctorsError ? (
+                        /* Error State */
+                        <div className="text-center py-8">
+                          <svg className="w-12 h-12 text-red-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <h4 className="text-lg font-semibold text-red-600 mb-2">Failed to Load Doctors</h4>
+                          <p className="text-red-500 text-sm mb-4">{dateDoctorsError}</p>
+                          <Button
+                            onClick={() => fetchDoctorsForDate(formatDateString(selectedDate))}
+                            className="bg-red-500 hover:bg-red-600"
+                          >
+                            Try Again
+                          </Button>
+                        </div>
+                      ) : selectedDateDoctors.length === 0 ? (
+                        /* Empty State */
+                        <div className="text-center py-8">
+                          <UserIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                          <h4 className="text-lg font-semibold text-gray-600 mb-2">No Doctor Schedule Available</h4>
+                          <p className="text-gray-500 text-sm mb-4">
+                            No doctors have scheduled availability for {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.
+                          </p>
+                          <div className="space-y-2">
+                            <p className="text-gray-400 text-xs">Try selecting a different date or check back later.</p>
+                            <Button
+                              onClick={() => fetchDoctorsForDate(formatDateString(selectedDate))}
+                              variant="outline"
+                              className="border-purple-300 text-purple-700 hover:bg-purple-50"
+                            >
+                              Refresh
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Doctors Available - Show filters and list */
+                        <div>
+                      
+                      {/* Filter and Search Section */}
+                      {selectedDateDoctors.length > 1 && (
+                        <div className="mb-6 p-4 bg-white/70 rounded-lg border border-purple-100">
+                          <div className="flex flex-col sm:flex-row gap-4">
+                            {/* Search Input */}
+                            <div className="flex-1 relative">
+                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <MagnifyingGlassIcon className="h-4 w-4 text-purple-500" />
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="Search by doctor name or specialty..."
+                                value={doctorSearchTerm}
+                                onChange={(e) => setDoctorSearchTerm(e.target.value)}
+                                className="block w-full pl-10 pr-3 py-2 border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm placeholder-purple-400"
+                              />
+                            </div>
+                            
+                            {/* Specialty Filter */}
+                            <div className="relative">
+                              <select
+                                value={selectedSpecialty}
+                                onChange={(e) => setSelectedSpecialty(e.target.value)}
+                                className="appearance-none bg-white border border-purple-200 rounded-lg px-4 py-2 pr-8 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                              >
+                                <option value="">All Specialties</option>
+                                {getUniqueSpecialties().map(specialty => (
+                                  <option key={specialty} value={specialty}>{specialty}</option>
+                                ))}
+                              </select>
+                              <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                                <FunnelIcon className="h-4 w-4 text-purple-500" />
+                              </div>
+                            </div>
+                            
+                            {/* Sort Dropdown */}
+                            <div className="relative">
+                              <select
+                                value={sortBy}
+                                onChange={(e) => setSortBy(e.target.value)}
+                                className="appearance-none bg-white border border-purple-200 rounded-lg px-4 py-2 pr-8 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                              >
+                                <option value="name">Sort by Name</option>
+                                <option value="specialty">Sort by Specialty</option>
+                                <option value="slots">Sort by Availability</option>
+                              </select>
+                              <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                                <ChevronDownIcon className="h-4 w-4 text-purple-500" />
+                              </div>
+                            </div>
+                            
+                            {/* Clear Filters Button */}
+                            {(doctorSearchTerm || selectedSpecialty || sortBy !== 'name') && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={clearFilters}
+                                className="border-purple-300 text-purple-700 hover:bg-purple-50 flex items-center gap-2"
+                              >
+                                <XMarkIcon className="h-4 w-4" />
+                                Clear
+                              </Button>
+                            )}
+                          </div>
+                          
+                          {/* Quick Specialty Filters */}
+                          {getUniqueSpecialties().length > 1 && (
+                            <div className="mt-3">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-medium text-purple-700">Quick filters:</span>
+                                <button
+                                  onClick={() => setSelectedSpecialty('')}
+                                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                                    selectedSpecialty === '' 
+                                      ? 'bg-purple-600 text-white' 
+                                      : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                                  }`}
+                                >
+                                  All ({selectedDateDoctors.length})
+                                </button>
+                                {getUniqueSpecialties().slice(0, 4).map(specialty => {
+                                  const count = selectedDateDoctors.filter(d => d.specialty === specialty).length;
+                                  return (
+                                    <button
+                                      key={specialty}
+                                      onClick={() => setSelectedSpecialty(specialty)}
+                                      className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                                        selectedSpecialty === specialty 
+                                          ? 'bg-purple-600 text-white' 
+                                          : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                                      }`}
+                                    >
+                                      {specialty} ({count})
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Filter Results Summary */}
+                          {(doctorSearchTerm || selectedSpecialty) && (
+                            <div className="mt-3 flex items-center gap-2 text-sm text-purple-600">
+                              <AdjustmentsHorizontalIcon className="h-4 w-4" />
+                              <span>
+                                Showing {getFilteredDoctors().length} of {selectedDateDoctors.length} doctors
+                                {selectedSpecialty && (
+                                  <span className="ml-2 bg-purple-200 text-purple-800 px-2 py-1 rounded-full text-xs">
+                                    {selectedSpecialty}
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          )}
+                          {getDisplayDoctors().length > 2 && (
+                            <div className="mt-2 flex items-center justify-center text-xs text-purple-500">
+                              <span>↕ Scroll to see more doctors</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Selected Date Doctors List - Filtered View */}
+                      <div className={`space-y-3 ${getDisplayDoctors().length > 2 ? 'max-h-[600px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-purple-300 scrollbar-track-purple-100' : ''}`}>
+                        {getFilteredDoctors().length === 0 ? (
+                          <div className="text-center py-8">
+                            <MagnifyingGlassIcon className="h-12 w-12 text-purple-300 mx-auto mb-3" />
+                            <p className="text-purple-600 font-medium">No doctors found</p>
+                            <p className="text-purple-500 text-sm mt-1">
+                              {doctorSearchTerm || selectedSpecialty 
+                                ? 'Try adjusting your search or filter criteria' 
+                                : 'No doctors available for this date'}
+                            </p>
+                            {(doctorSearchTerm || selectedSpecialty) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={clearFilters}
+                                className="mt-3 border-purple-300 text-purple-700 hover:bg-purple-50"
+                              >
+                                Clear Filters
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          getDisplayDoctors().map((doctor) => (
+                          <div key={doctor.id} className="bg-white/90 p-6 rounded-xl border border-purple-200 hover:bg-white hover:shadow-xl transition-all duration-300 hover:border-purple-300">
+                            {/* Doctor Header */}
+                            <div className="flex items-start justify-between mb-4">
+                              <div className="flex items-start space-x-4">
+                                <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-indigo-500 rounded-xl flex items-center justify-center text-white shadow-lg">
+                                  <UserIcon className="w-8 h-8" />
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <h4 className="text-lg font-bold text-purple-900">
+                                      {highlightSearchTerm(doctor.name, doctorSearchTerm)}
+                                    </h4>
+                                    <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
+                                      doctor.status === 'Available today' 
+                                        ? 'bg-green-100 text-green-800' 
+                                        : 'bg-yellow-100 text-yellow-800'
+                                    }`}>
+                                      {doctor.status || 'Available today'}
+                                    </span>
+                                  </div>
+                                  <p className="text-purple-700 font-medium mb-1">
+                                    {highlightSearchTerm(doctor.specialty, doctorSearchTerm)}
+                                  </p>
+                                  <div className="flex items-center gap-4 text-sm text-purple-600">
+                                    <span className="flex items-center gap-1">
+                                      <svg className="h-4 w-4 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                                      </svg>
+                                      {doctor.rating ? parseFloat(doctor.rating).toFixed(1) : '4.5'}/5
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                                      <PhoneIcon className="h-4 w-4" />
+                                      {doctor.phone || 'Available after booking'}
+                                    </span>
+                                    <span className="flex items-center gap-1 truncate">
+                                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                      </svg>
+                                      {doctor.email || 'contact@hospital.com'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-sm font-medium text-purple-900 mb-1">
+                                  {doctor.availableTimes.length} slots
+                                </div>
+                                <div className="text-lg font-bold text-purple-700">
+                                  ₹{doctor.consultationFee || '50'}
+                                </div>
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedDoctor(doctor);
+                                    setShowBookingModal(true);
+                                  }}
+                                  className="mt-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2 rounded-lg font-medium shadow-md"
+                                >
+                                  Book Now
+                                </Button>
+                              </div>
+                            </div>
+
+                            {/* Doctor Details */}
+                            <div className="bg-purple-50 rounded-lg p-4 mb-4">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                  <h5 className="text-sm font-semibold text-purple-800 mb-2">Today's Schedule</h5>
+                                  <p className="text-purple-700 text-sm">{doctor.workingHours}</p>
+                                </div>
+                                <div>
+                                  <h5 className="text-sm font-semibold text-purple-800 mb-2">Professional Experience</h5>
+                                  <p className="text-purple-700 text-sm">
+                                    {doctor.experience || '5+ years'} of clinical practice
+                                  </p>
+                                  <p className="text-purple-600 text-sm mt-1">
+                                    Specializing in {doctor.specialty?.toLowerCase() || 'general practice'}
+                                  </p>
+                                  {doctor.qualifications && (
+                                    <p className="text-purple-600 text-xs mt-1 italic">
+                                      {doctor.qualifications}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Available Time Slots */}
+                            {doctor.availableTimes.length > 0 && (
+                              <div>
+                                <h5 className="text-sm font-semibold text-purple-800 mb-3 flex items-center gap-2">
+                                  <ClockIcon className="h-4 w-4" />
+                                  Available Time Slots ({doctor.availableTimes.length})
+                                </h5>
+                                <div className="flex flex-wrap gap-2">
+                                  {doctor.availableTimes.slice(0, 6).map((time, index) => (
+                                    <button 
+                                      key={index} 
+                                      onClick={() => {
+                                        setSelectedDoctor(doctor);
+                                        setAppointmentData(prev => ({ ...prev, time: time }));
+                                        setShowBookingModal(true);
+                                      }}
+                                      className="bg-purple-100 hover:bg-purple-200 text-purple-800 px-3 py-2 rounded-lg text-sm font-medium transition-colors border border-purple-200 hover:border-purple-300"
+                                    >
+                                      {time}
+                                    </button>
+                                  ))}
+                                  {doctor.availableTimes.length > 6 && (
+                                    <div className="flex items-center text-purple-600 text-sm px-3 py-2">
+                                      +{doctor.availableTimes.length - 6} more slots
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                        )}
+                        {!showAllDoctors && getFilteredDoctors().length > 3 && (
+                          <div className="text-center">
+                            <button 
+                              onClick={() => setShowAllDoctors(true)}
+                              className="text-green-700 text-sm hover:text-green-800 font-medium bg-green-50 hover:bg-green-100 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                            >
+                              <EyeIcon className="h-4 w-4" />
+                              View all {getFilteredDoctors().length} doctors
+                            </button>
+                          </div>
+                        )}
+                        {showAllDoctors && getFilteredDoctors().length > 3 && (
+                          <div className="text-center">
+                            <button 
+                              onClick={() => setShowAllDoctors(false)}
+                              className="text-green-700 text-sm hover:text-green-800 font-medium bg-green-50 hover:bg-green-100 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                            >
+                              <ChevronDownIcon className="h-4 w-4 rotate-180" />
+                              Show less
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                
+               
+
+                {/* Upcoming Appointments Section */}
+                <Card className="bg-white/90 backdrop-blur-sm border-0 shadow-xl">
+                  <div className="p-6">
+                    <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center">
+                      <CalendarDaysIcon className="w-6 h-6 mr-2 text-purple-600" />
+                      Your Upcoming Appointments
+                    </h3>
+                    
+                    {upcomingAppointments.length > 0 ? (
+                      <div className="space-y-4">
+                        {upcomingAppointments.map((appointment) => (
+                          <div key={appointment.id} className="relative overflow-hidden rounded-xl bg-gradient-to-r from-white via-purple-50 to-white p-6 border-2 border-purple-100 hover:border-purple-300 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                              <div className="flex items-center space-x-4">
+                                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg">
+                                  <UserIcon className="w-6 h-6" />
+                                </div>
+                                <div>
+                                  <div className="font-bold text-lg text-gray-900">{appointment.doctor}</div>
+                                  <div className="text-sm text-gray-600">{appointment.specialty}</div>
+                                  <div className="flex items-center space-x-3 mt-1">
+                                    <span className="text-yellow-400 flex items-center"><svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>{appointment.rating}</span>
+                                    <span className={`px-2 py-1 text-xs rounded-full font-medium ${
+                                      appointment.status === 'confirmed' 
+                                        ? 'bg-green-100 text-green-700' 
+                                        : 'bg-yellow-100 text-yellow-700'
+                                    }`}>
+                                      {appointment.status}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-bold text-lg text-gray-900">{appointment.date}</div>
+                                <div className="text-purple-600 font-semibold">{appointment.time}</div>
+                                <span className={`inline-flex px-3 py-1 text-sm rounded-full font-medium mt-2 items-center ${
+                                  appointment.type === 'Video Call' 
+                                    ? 'bg-blue-100 text-blue-700' 
+                                    : 'bg-green-100 text-green-700'
+                                }`}>
+                                  {appointment.type === 'Video Call' ? 
+                                    <VideoCameraIcon className="w-4 h-4 mr-1" /> : 
+                                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+                                  }
+                                  {appointment.type}
+                                </span>
+                              </div>
+                            </div>
+                            <div className={`absolute top-0 right-0 w-2 h-full ${
+                              appointment.status === 'confirmed' ? 'bg-green-400' : 'bg-yellow-400'
+                            }`}></div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8">
+                        <CalendarDaysIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                        <h4 className="text-lg font-semibold text-gray-600 mb-2">No upcoming appointments</h4>
+                        <p className="text-gray-500 mb-4">Schedule your next appointment to maintain your health.</p>
+                        <Button 
+                          className="bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700"
+                          onClick={() => {
+                            if (availableDoctors.length > 0) {
+                              handleBookAppointment(availableDoctors[0]);
+                            }
+                          }}
+                        >
+                          <PlusIcon className="w-4 h-4 mr-2" />
+                          Schedule Appointment
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </Card>
               </div>
@@ -1118,8 +2043,11 @@ const PatientDashboard = () => {
                     }`}>
                       {vital.status}
                     </div>
-                    <div className="text-xs text-gray-500">
-                      Trend: {vital.trend === 'improving' ? '📈' : '📊'} {vital.trend}
+                    <div className="text-xs text-gray-500 flex items-center justify-center">
+                      Trend: {vital.trend === 'improving' ? 
+                        <ChartBarIcon className="w-4 h-4 mx-1 text-green-600" /> : 
+                        <ChartBarIcon className="w-4 h-4 mx-1 text-blue-600" />
+                      } {vital.trend}
                     </div>
                   </div>
                 </Card>
@@ -1179,7 +2107,7 @@ const PatientDashboard = () => {
                 <div className="space-y-4">
                   <div className="h-48 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg flex items-center justify-center">
                     <div className="text-center text-gray-600">
-                      <div className="text-4xl mb-2">📊</div>
+                      <ChartBarIcon className="w-16 h-16 mx-auto mb-2 text-blue-500" />
                       <div className="font-medium">Interactive Chart</div>
                       <div className="text-sm text-gray-500">Track your health trends over time</div>
                     </div>
@@ -1207,11 +2135,15 @@ const PatientDashboard = () => {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-                <span className="mr-3 text-3xl">💡</span>
+                <svg className="w-8 h-8 mr-3 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
                 Personalized Health Tips
               </h2>
-              <Button className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 shadow-lg hover:shadow-xl transition-all duration-300">
-                <span className="mr-2">✨</span>
+              <Button className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 shadow-lg hover:shadow-xl transition-all duration-300 flex items-center">
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                </svg>
                 Get More Tips
               </Button>
             </div>
@@ -1221,7 +2153,9 @@ const PatientDashboard = () => {
                 <Card key={tip.id} className="bg-white/80 backdrop-blur-sm border-0 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 overflow-hidden group">
                   <div className="relative p-6">
                     <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-blue-100 to-purple-100 rounded-bl-3xl flex items-center justify-center">
-                      <span className="text-2xl">{tip.icon}</span>
+                      {tip.icon === 'water' && <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>}
+                      {tip.icon === 'fitness' && <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>}
+                      {tip.icon === 'nutrition' && <svg className="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path></svg>}
                     </div>
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-3">

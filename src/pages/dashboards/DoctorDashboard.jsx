@@ -133,6 +133,15 @@ const DoctorDashboard = () => {
     return `${year}-${month}-${day}`;
   };
 
+  // Helper function to display UTC date properly in local timezone
+  const formatDisplayDate = (dateString, options = {}) => {
+    // Parse the UTC date and display it as intended
+    const date = new Date(dateString);
+    // Extract the UTC date components to avoid timezone conversion
+    const utcDate = new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    return utcDate.toLocaleDateString('en-US', options);
+  };
+
   // Mock notifications data
   const notifications = [
     {
@@ -761,7 +770,8 @@ const DoctorDashboard = () => {
     try {
       const token = localStorage.getItem('token');
       const dateStrings = dates.map(date => {
-        const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+        // Since selectedDates are already stored as formatted strings, use them directly
+        const dateStr = typeof date === 'string' ? date : formatDateString(date);
         return dateStr;
       }).join(',');
 
@@ -948,7 +958,8 @@ const DoctorDashboard = () => {
       // Initialize custom schedules for selected dates
       const newCustomSchedules = {};
       selectedDates.forEach(date => {
-        const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+        // Since selectedDates are already stored as formatted strings, use them directly
+        const dateStr = typeof date === 'string' ? date : formatDateString(date);
         newCustomSchedules[dateStr] = {
           startTime: defaultTimes.startTime,
           endTime: defaultTimes.endTime
@@ -1051,7 +1062,7 @@ const DoctorDashboard = () => {
     // Validate time range when both start and end times are set
     if (newSchedule.startTime && newSchedule.endTime) {
       if (!validateTimeRange(newSchedule.startTime, newSchedule.endTime)) {
-        showTimeValidationError(`End time must be after start time and the schedule must be at least 30 minutes long for ${new Date(date).toLocaleDateString()}.`);
+        showTimeValidationError(`End time must be after start time and the schedule must be at least 30 minutes long for ${new Date(date + 'T00:00:00').toLocaleDateString()}.`);
         return; // Don't update if validation fails
       }
     }
@@ -1106,7 +1117,8 @@ const DoctorDashboard = () => {
 
     // Prepare schedule data
     const schedules = selectedDates.map(date => {
-      const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+      // Since selectedDates are already stored as formatted strings, use them directly
+      const dateStr = typeof date === 'string' ? date : formatDateString(date);
       
       if (scheduleMode === 'custom' && customSchedules[dateStr]) {
         return {
@@ -3323,13 +3335,14 @@ const DoctorDashboard = () => {
                         </label>
                         <div className="space-y-3 max-h-80 overflow-y-auto">
                           {selectedDates.map((date, index) => {
-                            const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+                            // Since selectedDates are already stored as formatted strings, use them directly
+                            const dateStr = typeof date === 'string' ? date : formatDateString(date);
                             const customSchedule = customSchedules[dateStr] || { startTime: defaultTimes.startTime, endTime: defaultTimes.endTime };
                             
                             return (
                               <div key={dateStr} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                                 <div className="text-sm font-semibold text-gray-900 mb-3">
-                                  {new Date(dateStr).toLocaleDateString('en-US', { 
+                                  {new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { 
                                     weekday: 'long', 
                                     year: 'numeric', 
                                     month: 'long', 
@@ -3377,11 +3390,12 @@ const DoctorDashboard = () => {
                         </div>
                         <div className="text-xs text-emerald-600 space-y-1 max-h-24 overflow-y-auto">
                           {selectedDates.slice(0, 8).map((date, index) => {
-                            const dateStr = typeof date === 'string' ? date : formatDateString(new Date(date));
+                            // Since selectedDates are already stored as formatted strings, use them directly
+                            const dateStr = typeof date === 'string' ? date : formatDateString(date);
                             return (
                               <div key={dateStr} className="flex justify-between items-center">
                                 <span>
-                                  {new Date(dateStr).toLocaleDateString('en-US', { 
+                                  {new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { 
                                     weekday: 'short', 
                                     month: 'short', 
                                     day: 'numeric' 
@@ -3444,7 +3458,7 @@ const DoctorDashboard = () => {
                       <div key={schedule._id} className="bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow">
                         <div className="flex justify-between items-start mb-3">
                           <div className="text-sm font-semibold text-gray-900">
-                            {new Date(schedule.date).toLocaleDateString('en-US', { 
+                            {formatDisplayDate(schedule.date, { 
                               weekday: 'short', 
                               month: 'short', 
                               day: 'numeric',
@@ -3452,7 +3466,7 @@ const DoctorDashboard = () => {
                             })}
                           </div>
                           <button
-                            onClick={() => handleDeleteUpcomingSchedule(schedule._id, new Date(schedule.date).toLocaleDateString())}
+                            onClick={() => handleDeleteUpcomingSchedule(schedule._id, formatDisplayDate(schedule.date))}
                             className="text-red-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors"
                             title="Delete schedule"
                           >

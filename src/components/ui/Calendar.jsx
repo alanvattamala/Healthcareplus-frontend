@@ -85,6 +85,11 @@ const Calendar = ({
     });
   };
 
+  const isToday = (date) => {
+    const today = new Date();
+    return formatDateString(date) === formatDateString(today);
+  };
+
   const isDateDisabled = (date) => {
     // Check if date is before minDate
     if (minDate && date < minDate) return true;
@@ -154,6 +159,7 @@ const Calendar = ({
           const isDisabled = isDateDisabled(dayInfo.date);
           const hasSchedule = hasExistingSchedule(dayInfo.date);
           const hasCompleted = hasCompletedSchedule(dayInfo.date);
+          const todayDate = isToday(dayInfo.date);
           
           return (
             <button
@@ -164,29 +170,35 @@ const Calendar = ({
                 relative p-3 text-sm border-r border-b border-gray-100 aspect-square
                 transition-colors duration-200 hover:bg-gray-50
                 ${!dayInfo.isCurrentMonth ? 'text-gray-300 bg-gray-50' : 'text-gray-900'}
-                ${isSelected ? 'bg-blue-500 text-white hover:bg-blue-600' : ''}
+                ${isSelected ? 'border-2 border-blue-500 bg-blue-50 text-blue-700 hover:bg-blue-100' : ''}
+                ${todayDate && !isSelected ? 'border-2 border-orange-400 bg-orange-50 text-orange-700' : ''}
                 ${isDisabled && dayInfo.isCurrentMonth ? 'text-gray-300 bg-gray-50 cursor-not-allowed' : ''}
-                ${hasSchedule && !isSelected ? 'bg-green-50 text-green-700 border-green-200' : ''}
-                ${hasCompleted && !isSelected && !hasSchedule ? 'bg-purple-50 text-purple-700 border-purple-200' : ''}
+                ${hasSchedule && !isSelected && !todayDate ? 'bg-green-50 text-green-700 border-green-200' : ''}
+                ${hasCompleted && !isSelected && !hasSchedule && !todayDate ? 'bg-purple-50 text-purple-700 border-purple-200' : ''}
               `}
             >
               <span className="flex items-center justify-center h-full">
                 {dayInfo.day}
               </span>
               
+              {/* Today indicator */}
+              {todayDate && !isSelected && (
+                <div className="absolute top-1 right-1 w-2 h-2 bg-orange-500 rounded-full"></div>
+              )}
+              
               {/* Existing schedule indicator */}
-              {hasSchedule && !isSelected && (
+              {hasSchedule && !isSelected && !todayDate && (
                 <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full"></div>
               )}
               
               {/* Completed schedule indicator */}
-              {hasCompleted && !isSelected && !hasSchedule && (
+              {hasCompleted && !isSelected && !hasSchedule && !todayDate && (
                 <div className="absolute top-1 right-1 w-2 h-2 bg-purple-500 rounded-full"></div>
               )}
               
               {/* Selected date indicator */}
               {isSelected && (
-                <div className="absolute top-1 right-1 w-2 h-2 bg-white rounded-full"></div>
+                <div className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full"></div>
               )}
             </button>
           );
@@ -197,8 +209,12 @@ const Calendar = ({
       <div className="p-3 border-t border-gray-200 bg-gray-50">
         <div className="flex flex-wrap gap-4 text-xs">
           <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-blue-500 rounded"></div>
+            <div className="w-3 h-3 bg-blue-50 border-2 border-blue-500 rounded"></div>
             <span className="text-gray-600">Selected</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-orange-50 border-2 border-orange-400 rounded"></div>
+            <span className="text-gray-600">Today</span>
           </div>
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 bg-green-100 border border-green-300 rounded"></div>

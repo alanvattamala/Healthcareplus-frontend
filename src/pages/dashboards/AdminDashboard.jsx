@@ -319,7 +319,7 @@ const AdminDashboard = () => {
             ? `Consultation fee request: ${approval.requestData.currency === 'USD' ? '$' : 
                approval.requestData.currency === 'EUR' ? '€' : 
                approval.requestData.currency === 'GBP' ? '£' : 
-               approval.requestData.currency === 'INR' ? '₹' : '$'}${approval.requestData.amount} per session`
+               approval.requestData.currency === 'INR' ? '₹' : '₹'}${approval.requestData.amount} per session`
             : `Pending ${approval.type.replace('_', ' ')} approval`,
           time: new Date(approval.submittedAt).toLocaleDateString(),
           urgent: false,
@@ -948,7 +948,7 @@ const AdminDashboard = () => {
                   <div className="flex items-center justify-center mb-3">
                     <ChartBarIcon className="w-8 h-8 sm:w-10 sm:h-10 group-hover:scale-110 transition-transform duration-200" />
                   </div>
-                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">$45.2K</div>
+                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">₹45.2K</div>
                   <div className="text-purple-100 text-xs sm:text-sm">Revenue</div>
                   <div className="mt-2 sm:mt-3 text-xs bg-white/20 rounded-full px-2 sm:px-3 py-1 inline-block">
                     +23% this month
@@ -1596,7 +1596,7 @@ const AdminDashboard = () => {
                                 <div className="font-medium text-gray-900">{doctor.specialization}</div>
                                 {doctor.consultationFee && (
                                   <div className="text-sm text-green-600 font-medium">
-                                    Fee: ${doctor.consultationFee}
+                                    Fee: ₹{doctor.consultationFee}
                                   </div>
                                 )}
                               </td>
@@ -1703,7 +1703,7 @@ const AdminDashboard = () => {
                               <p className="text-sm text-gray-900">{doctor.specialization}</p>
                               {doctor.consultationFee && (
                                 <p className="text-xs text-green-600 font-medium mt-1">
-                                  Fee: ${doctor.consultationFee}
+                                  Fee: ₹{doctor.consultationFee}
                                 </p>
                               )}
                             </div>
@@ -1915,7 +1915,7 @@ const AdminDashboard = () => {
                                 {approval.currency === 'USD' ? '$' : 
                                  approval.currency === 'EUR' ? '€' : 
                                  approval.currency === 'GBP' ? '£' : 
-                                 approval.currency === 'INR' ? '₹' : '$'}{approval.amount}
+                                 approval.currency === 'INR' ? '₹' : '₹'}{approval.amount}
                               </span>
                             </div>
                           </div>
@@ -2420,7 +2420,7 @@ const AdminDashboard = () => {
                   {selectedDoctor.consultationFee && (
                     <div className="bg-emerald-50 p-3 sm:p-4 rounded-lg">
                       <div className="text-xs sm:text-sm text-emerald-600 font-medium">Consultation Fee</div>
-                      <div className="text-sm sm:text-base font-medium text-emerald-800">${selectedDoctor.consultationFee}</div>
+                      <div className="text-sm sm:text-base font-medium text-emerald-800">₹{selectedDoctor.consultationFee}</div>
                     </div>
                   )}
                 </div>
