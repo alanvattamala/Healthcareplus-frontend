@@ -10,7 +10,7 @@ import {
   UserIcon,
   ChevronDownIcon,
   ArrowRightOnRectangleIcon,
-  Cog6ToothIcon,
+  Cog6ToothIcon as CogIcon,
   HomeIcon,
   CalendarDaysIcon,
   ChartBarIcon,
@@ -27,7 +27,10 @@ import {
   FunnelIcon,
   AdjustmentsHorizontalIcon,
   VideoCameraIcon,
-  ClockIcon
+  ClockIcon,
+  ExclamationTriangleIcon,
+  CheckCircleIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 
 const PatientDashboard = () => {
@@ -69,12 +72,17 @@ const PatientDashboard = () => {
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [scheduledDates, setScheduledDates] = useState([]);
   const [selectedDateSchedules, setSelectedDateSchedules] = useState([]);
+  const [selectedDateAppointments, setSelectedDateAppointments] = useState([]);
   const [selectedDateDoctors, setSelectedDateDoctors] = useState([]);
   const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
   const [isLoadingDateDoctors, setIsLoadingDateDoctors] = useState(false);
+  const [isLoadingDateAppointments, setIsLoadingDateAppointments] = useState(false);
   const [dateDoctorsError, setDateDoctorsError] = useState(null);
   const [upcomingAppointments, setUpcomingAppointments] = useState([]);
   const [showQuickActions, setShowQuickActions] = useState(false);
+  const [selectedSlotDetails, setSelectedSlotDetails] = useState(null);
+  const [showSlotDetails, setShowSlotDetails] = useState(false);
+  const [expandedSlots, setExpandedSlots] = useState({}); // Track which doctors have expanded slots shown
   
   // Filter and search state for selected date doctors
   const [doctorSearchTerm, setDoctorSearchTerm] = useState('');
@@ -82,9 +90,48 @@ const PatientDashboard = () => {
   const [showAllDoctors, setShowAllDoctors] = useState(false);
   const [sortBy, setSortBy] = useState('name'); // name, specialty, slots
   
+  // Filter and search state for My Schedules page
+  const [scheduleFilter, setScheduleFilter] = useState('all');
+  const [scheduleSort, setScheduleSort] = useState('date-asc');
+  const [scheduleSearch, setScheduleSearch] = useState('');
+  
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
   const quickActionsRef = useRef(null);
+
+  // Helper functions for date and time validation
+  const isDateInPast = (date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const checkDate = new Date(date);
+    checkDate.setHours(0, 0, 0, 0);
+    return checkDate.getTime() < today.getTime();
+  };
+
+  const isScheduleTimeExpired = (doctor) => {
+    if (!selectedDate) return false;
+    
+    const today = new Date();
+    const selectedDateObj = new Date(selectedDate);
+    
+    // Only check time expiry for today's date
+    if (selectedDateObj.toDateString() !== today.toDateString()) {
+      return false;
+    }
+    
+    // Check if current time is past the doctor's schedule end time
+    if (doctor.scheduleDetails?.endTime) {
+      const [endHour, endMinute] = doctor.scheduleDetails.endTime.split(':').map(Number);
+      const currentHour = today.getHours();
+      const currentMinute = today.getMinutes();
+      const currentTotalMinutes = currentHour * 60 + currentMinute;
+      const endTotalMinutes = endHour * 60 + endMinute;
+      
+      return currentTotalMinutes >= endTotalMinutes;
+    }
+    
+    return false;
+  };
 
   // Mock notifications data
   const notifications = [
@@ -187,6 +234,35 @@ const PatientDashboard = () => {
     );
   };
 
+  // Helper function to handle slot selection
+  const handleSlotSelection = (doctor, timeSlot, slotIndex = null) => {
+    const slotDetails = {
+      doctor: doctor,
+      timeSlot: timeSlot,
+      slotIndex: slotIndex,
+      slotDuration: doctor.slotDuration || 30,
+      date: selectedDate,
+      isTimeRange: timeSlot.includes('-')
+    };
+    
+    setSelectedSlotDetails(slotDetails);
+    setSelectedDoctor(doctor);
+    setAppointmentData(prev => ({ 
+      ...prev, 
+      time: timeSlot,
+      date: formatDateString(selectedDate)
+    }));
+    setShowBookingModal(true);
+  };
+
+  // Helper function to toggle expanded slots for a specific doctor
+  const toggleExpandedSlots = (doctorId) => {
+    setExpandedSlots(prev => ({
+      ...prev,
+      [doctorId]: !prev[doctorId]
+    }));
+  };
+
   // Helper functions
   const getNextAvailableSlot = (scheduleInfo, availability) => {
     // Prefer schedule info if available, otherwise fall back to availability
@@ -246,51 +322,142 @@ const PatientDashboard = () => {
   const fetchScheduledAppointments = async () => {
     setIsLoadingSchedules(true);
     try {
-      // TODO: Implement proper patient appointments endpoint
-      // Currently using placeholder data until appointment system is ready
-      console.log('Fetching scheduled appointments - using placeholder data');
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.log('No token found, using placeholder data');
+        // Use placeholder data if no authentication
+        const placeholderAppointments = [
+          {
+            id: 1,
+            doctor: 'Dr. Sarah Johnson',
+            specialty: 'Cardiologist',
+            date: '2024-09-28',
+            time: '10:00 AM',
+            type: 'In-person',
+            avatar: null,
+            rating: 4.8,
+            status: 'scheduled'
+          },
+          {
+            id: 2,
+            doctor: 'Dr. Michael Chen',
+            specialty: 'Neurologist',
+            date: '2024-09-30',
+            time: '2:00 PM',
+            type: 'Video Call',
+            avatar: null,
+            rating: 4.9,
+            status: 'scheduled'
+          }
+        ];
+        setUpcomingAppointments(placeholderAppointments);
+        const placeholderSchedules = placeholderAppointments.map(appt => ({
+          date: appt.date,
+          hasSchedule: true,
+          doctorId: appt.id,
+          doctorName: appt.doctor,
+          time: appt.time,
+          times: [appt.time],
+          status: appt.status
+        }));
+        setScheduledDates(placeholderSchedules);
+        return;
+      }
 
-      // Placeholder appointments data
-      const placeholderAppointments = [
-        {
-          id: 1,
-          doctor: 'Dr. Sarah Johnson',
-          specialty: 'Cardiologist',
-          date: '2024-09-28',
-          time: '10:00 AM',
-          type: 'In-person',
-          avatar: null,
-          rating: 4.8,
-          status: 'scheduled'
-        },
-        {
-          id: 2,
-          doctor: 'Dr. Michael Chen',
-          specialty: 'Neurologist',
-          date: '2024-09-30',
-          time: '2:00 PM',
-          type: 'Video Call',
-          avatar: null,
-          rating: 4.9,
-          status: 'scheduled'
+      const response = await fetch('http://localhost:3001/api/appointments/my-appointments', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
-      ];
+      });
 
-      setUpcomingAppointments(placeholderAppointments);
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Raw API Response:', data);
+        const appointments = data.data || [];
+        console.log('📋 All appointments from API:', appointments);
+        
+        // Filter for upcoming appointments on the frontend (including today)
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        console.log('📅 Start of today:', startOfToday);
+        
+        const upcomingAppointments = appointments.filter(appointment => {
+          const appointmentDate = new Date(appointment.date);
+          console.log(`🔍 Checking appointment ${appointment._id}: ${appointmentDate} >= ${startOfToday} = ${appointmentDate >= startOfToday}`);
+          return appointmentDate >= startOfToday;
+        });
+        
+        console.log('⬆️ Filtered upcoming appointments:', upcomingAppointments);
+        
+        // Log first appointment to see structure
+        if (upcomingAppointments.length > 0) {
+          console.log('🔍 First upcoming appointment structure:', upcomingAppointments[0]);
+          console.log('👨‍⚕️ Doctor data in first upcoming appointment:', upcomingAppointments[0].doctor);
+        }
+        
+        // Format appointments for the UI
+        const formattedAppointments = upcomingAppointments.map(appointment => {
+          console.log('🔄 Processing appointment:', appointment._id, 'Doctor:', appointment.doctor);
+          return {
+            _id: appointment._id,
+            id: appointment._id,
+            doctor: appointment.doctor 
+              ? `Dr. ${appointment.doctor.firstName} ${appointment.doctor.lastName}`
+              : 'Unknown Doctor',
+            doctorId: appointment.doctor || {},
+            specialty: appointment.doctor?.specialization || appointment.doctor?.specialty || 'General Practice',
+            date: new Date(appointment.date).toLocaleDateString('en-CA'), // YYYY-MM-DD format
+            time: appointment.timeSlot || appointment.time || 'Time not specified',
+            timeSlot: appointment.timeSlot || appointment.time || 'Time not specified',
+            type: appointment.type === 'consultation' ? 'Consultation' : 
+                  appointment.type === 'follow-up' ? 'Follow-up' :
+                  appointment.type === 'checkup' ? 'Check-up' : 'Consultation',
+            avatar: null,
+            rating: 4.8, // Default rating - could be enhanced
+            status: appointment.status || 'scheduled',
+            reason: appointment.reason || 'No reason specified',
+            appointmentId: appointment._id,
+            duration: appointment.duration || 20,
+            slotId: appointment.slotId,
+            scheduleId: appointment.scheduleId,
+            createdAt: appointment.createdAt,
+            updatedAt: appointment.updatedAt,
+            formattedDate: new Date(appointment.date).toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            }),
+            // Add experience from doctor data if available
+            experience: appointment.doctor?.experience || 'N/A'
+          };
+        });
 
-      const placeholderSchedules = placeholderAppointments.map(appt => ({
-        date: appt.date,
-        hasSchedule: true,
-        doctorId: appt.id,
-        doctorName: appt.doctor,
-        time: appt.time,
-        times: [appt.time],
-        status: appt.status
-      }));
+        console.log('✨ Formatted appointments:', formattedAppointments);
+        setUpcomingAppointments(formattedAppointments);
 
-      setScheduledDates(placeholderSchedules);
+        // Format scheduled dates for calendar
+        const scheduledDates = formattedAppointments.map(appt => ({
+          date: appt.date,
+          hasSchedule: true,
+          doctorId: appt.doctorId,
+          doctorName: appt.doctor,
+          time: appt.time,
+          times: [appt.time],
+          status: appt.status,
+          appointmentId: appt.appointmentId
+        }));
+
+        setScheduledDates(scheduledDates);
+        console.log('Successfully loaded appointments:', formattedAppointments);
+      } else {
+        throw new Error('Failed to fetch appointments');
+      }
     } catch (error) {
-      console.error('Error with appointments:', error);
+      console.error('Error fetching appointments:', error);
+      // Fallback to placeholder data on error
       setScheduledDates([]);
       setUpcomingAppointments([]);
     } finally {
@@ -327,9 +494,22 @@ const PatientDashboard = () => {
           name: `Dr. ${doctor.firstName || 'Unknown'} ${doctor.lastName || 'Doctor'}`,
           specialty: doctor.specialization || 'General Practice',
           rating: 4.5 + (Math.random() * 0.4),
-          availableTimes: scheduleInfo.availableSlots || [],
+          availableTimes: scheduleInfo.rawSlots ? 
+            scheduleInfo.rawSlots
+              .filter(slot => slot.status === 'available')
+              .map(slot => slot.timeSlot || `${slot.startTime}-${slot.endTime}`) 
+            : [],
+          allTimeSlots: scheduleInfo.allTimeSlots || [], // All slots for display
+          slotsWithStatus: scheduleInfo.rawSlots || [], // Detailed slot status with timeSlot format
           totalSlots: scheduleInfo.totalSlots || 0,
+          availableSlotsCount: scheduleInfo.availableSlotsCount || 0,
+          bookedSlotsCount: scheduleInfo.bookedSlotsCount || 0,
+          expiredSlotsCount: scheduleInfo.expiredSlotsCount || 0,
+          slotDuration: scheduleInfo.slotDuration || 30,
+          rawSlots: scheduleInfo.rawSlots || [],
           isAvailableOnDate: doctor.isAvailableOnDate || false,
+          isActive: doctor.isActive, // Doctor's online/offline status
+          scheduleStatus: scheduleInfo.scheduleStatus || 'available', // 'available', 'ended', 'no_slots'
           color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][index % 4],
           email: doctor.email,
           phone: doctor.phone || 'Not provided',
@@ -344,18 +524,82 @@ const PatientDashboard = () => {
           },
           bio: `Experienced ${doctor.specialization || 'healthcare professional'} available for consultations.`,
           avatar: doctor.profileImage || null,
-          status: data.isToday && scheduleInfo.startTime ? 'Available today' : 'Available on selected date'
+          status: data.isToday && scheduleInfo.scheduleStatus === 'ended' ? 'Schedule ended for today' :
+                  data.isToday && scheduleInfo.scheduleStatus === 'available' ? 'Available today' :
+                  data.isToday && scheduleInfo.scheduleStatus === 'no_slots' ? 'No slots scheduled' :
+                  data.isToday && scheduleInfo.expiredSlotsCount > 0 && scheduleInfo.availableSlotsCount === 0 ? 'All slots have passed' :
+                  'Available on selected date'
         };
       });
 
       setSelectedDateDoctors(formattedDoctors);
+      setExpandedSlots({}); // Reset expanded slots when new doctors are loaded
       console.log(`Found ${formattedDoctors.length} doctors available for ${dateString}`);
     } catch (error) {
       console.error('Error fetching doctors for date:', error);
       setDateDoctorsError(error.message || 'Failed to load doctors for this date');
       setSelectedDateDoctors([]);
+      setExpandedSlots({}); // Reset expanded slots on error
     } finally {
       setIsLoadingDateDoctors(false);
+    }
+  };
+
+  // Fetch appointments for a specific date
+  const fetchAppointmentsForDate = async (dateString) => {
+    setIsLoadingDateAppointments(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.log('No token found, cannot fetch appointments');
+        setSelectedDateAppointments([]);
+        return;
+      }
+
+      console.log(`Fetching appointments for date: ${dateString}`);
+      
+      const response = await fetch(`http://localhost:3001/api/appointments/my-appointments?date=${dateString}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Appointments for date response:', data);
+
+      const appointments = data.data || [];
+      const formattedAppointments = appointments.map(appointment => ({
+        id: appointment._id,
+        doctor: `Dr. ${appointment.doctor.firstName} ${appointment.doctor.lastName}`,
+        specialty: appointment.doctor.specialization || 'General Practice',
+        date: new Date(appointment.date).toLocaleDateString('en-CA'),
+        time: appointment.time,
+        type: appointment.type === 'consultation' ? 'In-person' : 
+              appointment.type === 'follow-up' ? 'Follow-up' :
+              appointment.type === 'checkup' ? 'Check-up' : 'In-person',
+        status: appointment.status,
+        reason: appointment.reason,
+        appointmentId: appointment._id,
+        doctorId: appointment.doctor._id,
+        doctorEmail: appointment.doctor.email,
+        doctorPhone: appointment.doctor.phone,
+        rating: 4.8,
+        color: ['from-pink-500 to-rose-500', 'from-blue-500 to-indigo-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-violet-500'][appointments.indexOf(appointment) % 4]
+      }));
+
+      setSelectedDateAppointments(formattedAppointments);
+      console.log(`Found ${formattedAppointments.length} appointments for ${dateString}`);
+    } catch (error) {
+      console.error('Error fetching appointments for date:', error);
+      setSelectedDateAppointments([]);
+    } finally {
+      setIsLoadingDateAppointments(false);
     }
   };
 
@@ -479,6 +723,46 @@ const PatientDashboard = () => {
         
         setUser(patientData);
         
+        // Make test function available globally for debugging
+        window.testAppointmentAPI = async () => {
+          const token = localStorage.getItem('token');
+          if (!token) {
+            console.log('❌ No token found');
+            return;
+          }
+          
+          try {
+            console.log('🧪 Testing appointment API...');
+            const response = await fetch('http://localhost:3001/api/appointments/my-appointments', {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              console.log('✅ API Test Response:', data);
+              if (data.data && data.data.length > 0) {
+                console.log('👨‍⚕️ First appointment doctor data:', data.data[0].doctor);
+                console.log('🆔 Patient ID in appointment:', data.data[0].patient);
+                console.log('🆔 Current user ID:', patientData?._id);
+                console.log('📅 Appointment date:', data.data[0].date);
+                console.log('⏰ Appointment time:', data.data[0].time || data.data[0].timeSlot);
+              } else {
+                console.log('📝 No appointments found in response');
+              }
+            } else {
+              console.log('❌ API Test Failed:', response.status, response.statusText);
+              const errorText = await response.text();
+              console.log('Error details:', errorText);
+            }
+          } catch (error) {
+            console.log('❌ API Test Error:', error);
+          }
+        };
+        
         // Load available doctors and scheduled appointments
         await loadAvailableDoctors();
         await fetchScheduledAppointments();
@@ -568,6 +852,10 @@ const PatientDashboard = () => {
   useEffect(() => {
     clearFilters();
     setShowAllDoctors(false);
+    
+    // Fetch appointments for the selected date
+    const dateString = selectedDate.toISOString().split('T')[0];
+    fetchAppointmentsForDate(dateString);
   }, [selectedDate]);
 
   const onLogout = () => {
@@ -677,10 +965,10 @@ const PatientDashboard = () => {
 
   // Function to submit appointment booking
   const submitAppointmentBooking = async () => {
-    if (!selectedDoctor || !appointmentData.date || !appointmentData.time || !appointmentData.reason) {
+    if (!selectedDoctor || !appointmentData.time || !appointmentData.reason.trim()) {
       Swal.fire({
         title: 'Missing Information',
-        text: 'Please fill in all required fields.',
+        text: 'Please select a time slot and provide a reason for your visit.',
         icon: 'warning',
         confirmButtonColor: '#f59e0b'
       });
@@ -689,16 +977,61 @@ const PatientDashboard = () => {
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:3001/api/appointments/book', {
+      
+      // Format the date properly without timezone conversion
+      const formatDateForServer = (date) => {
+        // Use the actual date values without timezone conversion
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        console.log('Formatting date:', {
+          originalDate: date,
+          dateString: date.toString(),
+          year, month, day,
+          formatted: `${year}-${month}-${day}`
+        });
+        return `${year}-${month}-${day}`;
+      };
+      
+      const appointmentDate = formatDateForServer(selectedDate); // Format as YYYY-MM-DD without timezone issues
+      
+      // Extract start time from the time slot (e.g., "14:00-14:18" -> "14:00")
+      const timeSlot = appointmentData.time;
+      const startTime = timeSlot.includes('-') ? timeSlot.split('-')[0] : timeSlot;
+      const endTime = timeSlot.includes('-') ? timeSlot.split('-')[1] : '';
+      
+        console.log('Booking appointment with data:', {
+          doctorId: selectedDoctor._id || selectedDoctor.id,
+          doctorName: selectedDoctor.name,
+          doctorIsActive: selectedDoctor.isActive,
+          selectedDoctor: selectedDoctor,
+          originalSelectedDate: selectedDate,
+          selectedDateString: selectedDate.toString(),
+          selectedDateISO: selectedDate.toISOString(),
+          selectedDateGetDate: selectedDate.getDate(),
+          selectedDateGetMonth: selectedDate.getMonth(),
+          selectedDateGetFullYear: selectedDate.getFullYear(),
+          formattedAppointmentDate: appointmentDate,
+          timeSlot: timeSlot,
+          startTime: startTime,
+          endTime: endTime,
+          time: startTime, // Send only start time to backend
+          reason: appointmentData.reason,
+          type: appointmentData.type,
+          today: new Date().toISOString().split('T')[0],
+          todayFormatted: formatDateForServer(new Date()),
+          isToday: appointmentDate === formatDateForServer(new Date())
+        });      const response = await fetch('http://localhost:3001/api/appointments/book', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          doctorId: selectedDoctor.id,
-          date: appointmentData.date,
-          time: appointmentData.time,
+          doctorId: selectedDoctor._id || selectedDoctor.id,
+          date: appointmentDate,
+          time: startTime, // Send only the start time
+          timeSlot: timeSlot, // Also send the full time slot for reference
           reason: appointmentData.reason,
           type: appointmentData.type
         })
@@ -706,18 +1039,82 @@ const PatientDashboard = () => {
 
       if (response.ok) {
         const data = await response.json();
+        
+        // Close modal and reset form
         setShowBookingModal(false);
-        Swal.fire({
-          title: 'Appointment Booked!',
-          text: `Your appointment with ${selectedDoctor.name} has been scheduled for ${appointmentData.date} at ${appointmentData.time}.`,
-          icon: 'success',
-          confirmButtonColor: '#10b981'
+        setAppointmentData({
+          date: '',
+          time: '',
+          reason: '',
+          type: 'consultation'
         });
         
-        // Refresh available doctors or appointments list
-        loadAvailableDoctors();
+        // Show success message
+        const timeSlot = appointmentData.time;
+        const displayTime = timeSlot.includes('-') ? timeSlot.replace('-', ' to ') : timeSlot;
+        
+        Swal.fire({
+          title: 'Appointment Booked Successfully!',
+          html: `
+            <div class="text-left space-y-3">
+              <div class="bg-green-50 p-3 rounded-lg border border-green-200">
+                <h4 class="font-semibold text-green-800 mb-2">Appointment Details:</h4>
+                <div class="space-y-1 text-sm text-green-700">
+                  <div><strong>Doctor:</strong> ${selectedDoctor.name}</div>
+                  <div><strong>Date:</strong> ${selectedDate.toLocaleDateString('en-US', { 
+                    weekday: 'long', 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })}</div>
+                  <div><strong>Time:</strong> ${displayTime}</div>
+                  <div><strong>Duration:</strong> ${selectedDoctor.slotDuration || 30} minutes</div>
+                  <div><strong>Type:</strong> ${appointmentData.type}</div>
+                </div>
+              </div>
+              <div class="text-sm text-gray-600">
+                <strong>Next Steps:</strong>
+                <ul class="list-disc list-inside mt-1 space-y-1">
+                  <li>You'll receive a confirmation notification</li>
+                  <li>Arrive 10 minutes early for your appointment</li>
+                  <li>Bring any relevant medical documents</li>
+                </ul>
+              </div>
+            </div>
+          `,
+          icon: 'success',
+          confirmButtonColor: '#10b981',
+          confirmButtonText: 'Got it!'
+        });
+        
+        // Refresh appointments list and available doctors
+        await fetchScheduledAppointments();
+        await loadAvailableDoctors();
+        
+        // Refresh doctors and appointments for the selected date
+        await fetchDoctorsForDate(appointmentDate);
+        await fetchAppointmentsForDate(appointmentDate);
+        
       } else {
         const errorData = await response.json();
+        
+        console.log('Booking error response:', errorData);
+        console.log('Response status:', response.status);
+        console.log('Full response headers:', [...response.headers.entries()]);
+        
+        // Check if this is an offline doctor booking issue
+        if (errorData.message && errorData.message.includes('not available for same-day appointments while offline')) {
+          throw new Error('This doctor is currently offline and not accepting same-day appointments. Please try booking for a future date or contact the doctor directly.');
+        } else if (errorData.message && errorData.message.includes('not available on this day')) {
+          throw new Error('Doctor is not available on this day. Please select a different date.');
+        } else if (errorData.message && errorData.message.includes('not set up a schedule')) {
+          throw new Error('The doctor has not set up their schedule for this date yet. Please try a different date or contact the doctor directly.');
+        } else if (errorData.message && errorData.message.includes('not found')) {
+          throw new Error('Doctor not found. Please refresh the page and try again.');
+        } else if (errorData.message && errorData.message.includes('not a doctor')) {
+          throw new Error('Invalid doctor selection. Please refresh the page and try again.');
+        }
+        
         throw new Error(errorData.message || 'Failed to book appointment');
       }
     } catch (error) {
@@ -952,12 +1349,404 @@ const PatientDashboard = () => {
     await fetchDoctorsForDate(dateString);
   };
 
+  // Refresh appointments data for My Schedules page
+  const refreshMySchedules = async () => {
+    setIsLoadingSchedules(true);
+    try {
+      await fetchScheduledAppointments();
+      
+      Swal.fire({
+        title: 'Success!',
+        text: 'Your appointments have been refreshed',
+        timer: 2000,
+        timerProgressBar: true,
+        showConfirmButton: false,
+        icon: 'success'
+      });
+    } catch (error) {
+      console.error('Error refreshing appointments:', error);
+      Swal.fire({
+        title: 'Error',
+        text: 'Failed to refresh appointments. Please try again.',
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
+    } finally {
+      setIsLoadingSchedules(false);
+    }
+  };
+
+  // Appointment action handlers for "Your Upcoming Appointments" section
+  const handleJoinCall = async (appointment) => {
+    const isVideoCall = (appointment.type === 'Video Call' || appointment.isOnline);
+    
+    if (!isVideoCall) {
+      Swal.fire({
+        title: 'Not Available',
+        text: 'This appointment is not a video call. Please visit the medical center for your in-person appointment.',
+        icon: 'info',
+        confirmButtonText: 'Got it',
+        confirmButtonColor: '#3b82f6'
+      });
+      return;
+    }
+
+    if (appointment.status !== 'confirmed') {
+      Swal.fire({
+        title: 'Call Not Available',
+        text: 'Video call is only available for confirmed appointments.',
+        icon: 'warning',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#f59e0b'
+      });
+      return;
+    }
+
+    // Check if appointment is today or within call window
+    const appointmentDate = new Date(appointment.date);
+    const now = new Date();
+    const diffHours = (appointmentDate - now) / (1000 * 60 * 60);
+
+    if (diffHours > 0.5) { // More than 30 minutes early
+      Swal.fire({
+        title: 'Too Early',
+        text: 'Video call will be available 30 minutes before your appointment time.',
+        icon: 'info',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#3b82f6'
+      });
+      return;
+    }
+
+    if (diffHours < -2) { // More than 2 hours late
+      Swal.fire({
+        title: 'Call Expired',
+        text: 'This video call session has expired. Please contact your doctor to reschedule.',
+        icon: 'warning',
+        confirmButtonText: 'OK',
+        confirmButtonColor: '#f59e0b'
+      });
+      return;
+    }
+
+    // Show joining modal
+    Swal.fire({
+      title: 'Joining Video Call',
+      html: `
+        <div class="text-center">
+          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p class="text-gray-700 mb-2">Connecting you to your appointment with</p>
+          <p class="font-semibold text-gray-900">${appointment.doctor}</p>
+          <p class="text-sm text-gray-500 mt-2">Please wait while we establish the connection...</p>
+        </div>
+      `,
+      allowOutsideClick: false,
+      showConfirmButton: false,
+      timer: 3000
+    });
+
+    // TODO: Integrate with actual video calling service
+    setTimeout(() => {
+      Swal.fire({
+        title: 'Video Call Ready!',
+        text: 'Your video call session is ready. You would normally be redirected to the video platform now.',
+        icon: 'success',
+        confirmButtonText: 'Join Now',
+        confirmButtonColor: '#10b981'
+      });
+    }, 3000);
+
+    console.log('Joining video call for appointment:', appointment._id);
+  };
+
+  const handleRescheduleAppointment = async (appointment) => {
+    const { value: newDate } = await Swal.fire({
+      title: 'Reschedule Appointment',
+      html: `
+        <div class="text-left">
+          <p class="mb-4">Current appointment: <strong>${appointment.doctor}</strong></p>
+          <p class="mb-4">Current date: <strong>${appointment.formattedDate}</strong></p>
+          <p class="mb-4">Current time: <strong>${appointment.time}</strong></p>
+          <label for="newDate" class="block text-sm font-medium text-gray-700 mb-2">Select new date:</label>
+          <input type="date" id="newDate" class="w-full p-2 border border-gray-300 rounded-md" min="${new Date().toISOString().split('T')[0]}">
+        </div>
+      `,
+      focusConfirm: false,
+      showCancelButton: true,
+      confirmButtonText: 'Reschedule',
+      preConfirm: () => {
+        const newDate = document.getElementById('newDate').value;
+        if (!newDate) {
+          Swal.showValidationMessage('Please select a new date');
+          return false;
+        }
+        return newDate;
+      }
+    });
+
+    if (newDate) {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`http://localhost:3001/api/appointments/${appointment._id}/reschedule`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            newDate: newDate,
+            reason: 'Patient requested reschedule'
+          })
+        });
+
+        if (response.ok) {
+          await fetchScheduledAppointments(); // Refresh appointments
+          Swal.fire({
+            title: 'Success!',
+            text: 'Your appointment has been rescheduled successfully.',
+            icon: 'success'
+          });
+        } else {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to reschedule appointment');
+        }
+      } catch (error) {
+        console.error('Error rescheduling appointment:', error);
+        Swal.fire({
+          title: 'Error',
+          text: error.message || 'Failed to reschedule appointment. Please try again.',
+          icon: 'error'
+        });
+      }
+    }
+  };
+
+  const handleViewDetails = async (appointment) => {
+    Swal.fire({
+      title: 'Appointment Details',
+      html: `
+        <div class="text-left space-y-3">
+          <div class="border-b pb-3">
+            <h4 class="font-semibold text-gray-900">${appointment.doctor}</h4>
+            <p class="text-gray-600">${appointment.specialty}</p>
+          </div>
+          
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Date</label>
+              <p class="text-gray-900 font-medium">${appointment.formattedDate}</p>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Time</label>
+              <p class="text-gray-900 font-medium">${appointment.time}</p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Type</label>
+              <p class="text-gray-900">${appointment.type || 'In-Person'}</p>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Status</label>
+              <span class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ${
+                appointment.status === 'confirmed' ? 'bg-green-100 text-green-800' :
+                appointment.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                appointment.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                'bg-blue-100 text-blue-800'
+              }">${appointment.status}</span>
+            </div>
+          </div>
+
+          ${appointment.reason ? `
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Reason for Visit</label>
+              <p class="text-gray-900">${appointment.reason}</p>
+            </div>
+          ` : ''}
+
+          ${appointment.appointmentId ? `
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Appointment ID</label>
+              <p class="text-gray-900 font-mono">${appointment.appointmentId}</p>
+            </div>
+          ` : ''}
+
+          ${appointment.duration ? `
+            <div>
+              <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide">Duration</label>
+              <p class="text-gray-900">${appointment.duration} minutes</p>
+            </div>
+          ` : ''}
+        </div>
+      `,
+      width: '500px',
+      confirmButtonText: 'Close',
+      confirmButtonColor: '#3b82f6'
+    });
+  };
+
+  const handleCancelAppointment = async (appointment) => {
+    const result = await Swal.fire({
+      title: 'Cancel Appointment?',
+      html: `
+        <div class="text-left">
+          <p class="mb-4">Are you sure you want to cancel your appointment with <strong>${appointment.doctor}</strong>?</p>
+          <p class="mb-4">Date: <strong>${appointment.formattedDate}</strong> at <strong>${appointment.time}</strong></p>
+          <label for="cancelReason" class="block text-sm font-medium text-gray-700 mb-2">Reason for cancellation (optional):</label>
+          <textarea id="cancelReason" rows="3" class="w-full p-2 border border-gray-300 rounded-md" placeholder="Please provide a reason for cancellation..."></textarea>
+        </div>
+      `,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: 'Yes, Cancel',
+      cancelButtonText: 'Keep Appointment',
+      preConfirm: () => {
+        const reason = document.getElementById('cancelReason').value;
+        return reason || 'No reason provided';
+      }
+    });
+
+    if (result.isConfirmed) {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`http://localhost:3001/api/appointments/${appointment._id}/cancel`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            status: 'cancelled',
+            cancellationReason: result.value,
+            cancelledBy: 'patient'
+          })
+        });
+
+        if (response.ok) {
+          await fetchScheduledAppointments(); // Refresh appointments
+          Swal.fire({
+            title: 'Cancelled!',
+            text: 'Your appointment has been cancelled successfully.',
+            icon: 'success'
+          });
+        } else {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to cancel appointment');
+        }
+      } catch (error) {
+        console.error('Error cancelling appointment:', error);
+        Swal.fire({
+          title: 'Error',
+          text: error.message || 'Failed to cancel appointment. Please try again.',
+          icon: 'error'
+        });
+      }
+    }
+  };
+
+  // Filter and sort appointments for My Schedules page
+  const getFilteredAppointments = () => {
+    let filtered = [...upcomingAppointments];
+
+    // Apply search filter
+    if (scheduleSearch) {
+      const searchTerm = scheduleSearch.toLowerCase();
+      filtered = filtered.filter(appointment => 
+        appointment.doctor?.toLowerCase().includes(searchTerm) ||
+        appointment.specialty?.toLowerCase().includes(searchTerm) ||
+        appointment.reason?.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Apply status filter
+    if (scheduleFilter !== 'all') {
+      const today = new Date();
+      const todayString = today.toDateString();
+
+      switch (scheduleFilter) {
+        case 'upcoming':
+          filtered = filtered.filter(apt => new Date(apt.date) > today);
+          break;
+        case 'today':
+          filtered = filtered.filter(apt => new Date(apt.date).toDateString() === todayString);
+          break;
+        case 'week':
+          const nextWeek = new Date();
+          nextWeek.setDate(nextWeek.getDate() + 7);
+          filtered = filtered.filter(apt => {
+            const aptDate = new Date(apt.date);
+            return aptDate >= today && aptDate <= nextWeek;
+          });
+          break;
+        case 'month':
+          const nextMonth = new Date();
+          nextMonth.setMonth(nextMonth.getMonth() + 1);
+          filtered = filtered.filter(apt => {
+            const aptDate = new Date(apt.date);
+            return aptDate >= today && aptDate <= nextMonth;
+          });
+          break;
+        case 'completed':
+          filtered = filtered.filter(apt => apt.status === 'completed');
+          break;
+        case 'cancelled':
+          filtered = filtered.filter(apt => apt.status === 'cancelled');
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Apply sorting
+    filtered.sort((a, b) => {
+      switch (scheduleSort) {
+        case 'date-asc':
+          return new Date(a.date) - new Date(b.date);
+        case 'date-desc':
+          return new Date(b.date) - new Date(a.date);
+        case 'doctor':
+          return a.doctor?.localeCompare(b.doctor || '');
+        case 'specialty':
+          return a.specialty?.localeCompare(b.specialty || '');
+        case 'status':
+          return a.status?.localeCompare(b.status || '');
+        case 'created':
+          return new Date(b.appointmentId) - new Date(a.appointmentId); // Assuming newer IDs are later
+        default:
+          return 0;
+      }
+    });
+
+    return filtered;
+  };
+
+  // Handle filter/sort changes
+  const handleFilterChange = (filterType, value) => {
+    if (filterType === 'filter') {
+      setScheduleFilter(value);
+    } else if (filterType === 'sort') {
+      setScheduleSort(value);
+    } else if (filterType === 'search') {
+      setScheduleSearch(value);
+    }
+  };
+
+  const resetFilters = () => {
+    setScheduleFilter('all');
+    setScheduleSort('date-asc');
+    setScheduleSearch('');
+  };
+
   const sidebarItems = [
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-blue-600' },
     { id: 'symptom-checker', label: 'Symptom Checker', icon: BeakerIcon, gradient: 'from-green-500 to-green-600' },
     { id: 'appointments', label: 'Appointments', icon: CalendarDaysIcon, gradient: 'from-purple-500 to-purple-600' },
+    { id: 'my-schedules', label: 'My Schedules', icon: ClockIcon, gradient: 'from-orange-500 to-orange-600' },
     { id: 'prescriptions', label: 'E-Prescriptions', icon: DocumentTextIcon, gradient: 'from-pink-500 to-rose-600' },
-    { id: 'medical-history', label: 'Medical History', icon: ClockIcon, gradient: 'from-indigo-500 to-indigo-600' },
+    { id: 'medical-history', label: 'Medical History', icon: ChartBarIcon, gradient: 'from-indigo-500 to-indigo-600' },
     { id: 'chat', label: 'Chat', icon: ChatBubbleLeftIcon, gradient: 'from-cyan-500 to-cyan-600' }
   ];
 
@@ -1118,45 +1907,129 @@ const PatientDashboard = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl hover:shadow-2xl transition-all duration-300">
                 <div className="p-6">
-                  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                    <CalendarDaysIcon className="w-5 h-5 mr-2 text-blue-600" />
-                    Upcoming Appointments
-                  </h3>
-                  <div className="space-y-4">
-                    {upcomingAppointments.map((appointment) => (
-                      <div key={appointment.id} className="relative overflow-hidden rounded-xl bg-gradient-to-r from-white to-gray-50 p-4 border border-gray-100 hover:shadow-md transition-all duration-300 transform hover:-translate-y-1">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-lg">
-                              <UserIcon className="w-6 h-6" />
-                            </div>
-                            <div>
-                              <div className="font-semibold text-gray-900">{appointment.doctor}</div>
-                              <div className="text-sm text-gray-600">{appointment.specialty}</div>
-                              <div className="flex items-center space-x-1 mt-1">
-                                <svg className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
-                                <span className="text-xs text-gray-500">{appointment.rating}</span>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900 flex items-center">
+                      <CalendarDaysIcon className="w-5 h-5 mr-2 text-blue-600" />
+                      Upcoming Appointments
+                    </h3>
+                    <Button 
+                      onClick={() => setActiveTab('my-schedules')}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg border border-blue-600 hover:border-blue-700 transition-all duration-200"
+                    >
+                      View All
+                    </Button>
+                  </div>
+                  
+                  {upcomingAppointments.length > 0 ? (
+                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                      {upcomingAppointments.slice(0, 2).map((appointment, index) => {
+                        const appointmentDate = new Date(appointment.date);
+                        const isToday = appointmentDate.toDateString() === new Date().toDateString();
+                        const isUpcoming = appointmentDate > new Date();
+                        
+                        return (
+                          <div key={appointment._id || appointment.id} className="bg-white rounded-lg p-4 border border-gray-200 hover:border-blue-200 shadow-sm hover:shadow-md transition-all duration-300">
+                            {/* Header with doctor info */}
+                            <div className="flex items-center space-x-3 mb-3">
+                              <div className="relative">
+                                <img 
+                                  src={appointment.doctorId?.profileImage || 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1000&q=80'} 
+                                  alt={appointment.doctor || 'Doctor'}
+                                  className="w-12 h-12 rounded-full object-cover border-2 border-blue-100"
+                                />
+                                <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${
+                                  appointment.status === 'confirmed' ? 'bg-green-500' : 
+                                  appointment.status === 'pending' ? 'bg-yellow-500' : 'bg-red-500'
+                                }`}></div>
+                              </div>
+                              <div className="flex-1">
+                                <h4 className="font-bold text-gray-900">{appointment.doctor || 'Unknown Doctor'}</h4>
+                                <p className="text-gray-600 text-sm">{appointment.specialty || 'General Practice'}</p>
+                                <span className={`inline-flex px-2 py-1 text-xs rounded-full font-medium ${
+                                  isToday ? 'bg-emerald-100 text-emerald-800' :
+                                  isUpcoming ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+                                }`}>
+                                  {isToday ? 'Today' : isUpcoming ? 'Upcoming' : 'Past'}
+                                </span>
                               </div>
                             </div>
+
+                            {/* Appointment Details */}
+                            <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                              <div className="flex items-center justify-between text-sm">
+                                <div className="flex items-center text-gray-700">
+                                  <CalendarDaysIcon className="w-4 h-4 mr-2 text-blue-600" />
+                                  <span className="font-medium">
+                                    {appointmentDate.toLocaleDateString('en-US', {
+                                      weekday: 'short',
+                                      month: 'short',
+                                      day: 'numeric'
+                                    })}
+                                  </span>
+                                </div>
+                                <div className="flex items-center text-gray-700">
+                                  <ClockIcon className="w-4 h-4 mr-2 text-blue-600" />
+                                  <span className="font-medium">{appointment.timeSlot || appointment.time}</span>
+                                </div>
+                                <div className={`text-sm font-medium ${
+                                  appointment.status === 'confirmed' ? 'text-emerald-600' :
+                                  appointment.status === 'pending' ? 'text-yellow-600' : 'text-red-600'
+                                }`}>
+                                  {appointment.status?.charAt(0).toUpperCase() + appointment.status?.slice(1)}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex flex-wrap gap-2">
+                              {isUpcoming && (
+                                <Button 
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
+                                  onClick={() => handleJoinCall(appointment)}
+                                >
+                                  <VideoCameraIcon className="w-4 h-4 mr-1" />
+                                  Join Call
+                                </Button>
+                              )}
+                              
+                              <Button 
+                                className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
+                                onClick={() => handleViewDetails(appointment)}
+                              >
+                                <EyeIcon className="w-4 h-4 mr-1" />
+                                Details
+                              </Button>
+                              
+                              {isUpcoming && (
+                                <Button 
+                                  className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
+                                  onClick={() => handleCancelAppointment(appointment)}
+                                >
+                                  <XMarkIcon className="w-4 h-4 mr-1" />
+                                  Cancel
+                                </Button>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-right">
-                            <div className="text-sm font-medium text-gray-900">{appointment.date}</div>
-                            <div className="text-sm text-gray-600">{appointment.time}</div>
-                            <span className={`inline-flex px-3 py-1 text-xs rounded-full font-medium mt-2 ${
-                              appointment.type === 'Video Call' 
-                                ? 'bg-blue-100 text-blue-700' 
-                                : 'bg-green-100 text-green-700'
-                            }`}>
-                              {appointment.type}
-                            </span>
-                          </div>
-                        </div>
-                        <div className={`absolute top-0 right-0 w-2 h-full ${
-                          appointment.status === 'confirmed' ? 'bg-green-400' : 'bg-yellow-400'
-                        }`}></div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <div className="bg-gray-100 p-4 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+                        <CalendarDaysIcon className="w-8 h-8 text-gray-400" />
                       </div>
-                    ))}
-                  </div>
+                      <h4 className="text-lg font-semibold text-gray-900 mb-2">No Appointments Scheduled</h4>
+                      <p className="text-gray-500 mb-4">Book your first appointment to get started.</p>
+                      <Button 
+                        onClick={() => setActiveTab('appointments')}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium"
+                      >
+                        <PlusIcon className="w-4 h-4 mr-2" />
+                        Book Appointment
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </Card>
 
@@ -1202,6 +2075,339 @@ const PatientDashboard = () => {
           </div>
         );
 
+      case 'my-schedules':
+        return (
+          <div className="space-y-6">
+            {/* Header Section */}
+            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8">
+              <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-6">
+                <div className="flex items-center space-x-4">
+                  <div className="bg-orange-100 p-3 rounded-xl">
+                    <ClockIcon className="w-8 h-8 text-orange-600" />
+                  </div>
+                  <div>
+                    <h1 className="text-3xl font-bold text-gray-900">My Schedules</h1>
+                    <p className="text-gray-600 mt-1">Manage and track all your healthcare appointments</p>
+                  </div>
+                </div>
+                
+              </div>
+            </div>
+
+            {/* Quick Summary Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card className="bg-white border-0 shadow-lg hover:shadow-xl transition-all duration-300 rounded-xl">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="bg-emerald-100 p-3 rounded-xl mb-3">
+                        <CalendarDaysIcon className="w-6 h-6 text-emerald-600" />
+                      </div>
+                      <div className="text-3xl font-bold text-gray-900 mb-1">{upcomingAppointments.length}</div>
+                      <div className="text-gray-600 text-sm font-medium">Total Appointments</div>
+                    </div>
+                    <div className="text-emerald-600 text-right">
+                      <div className="text-xs text-gray-500 mb-1">This Month</div>
+                      <div className="text-lg font-semibold">+12%</div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+              
+              <Card className="bg-white border-0 shadow-lg hover:shadow-xl transition-all duration-300 rounded-xl">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="bg-blue-100 p-3 rounded-xl mb-3">
+                        <ClockIcon className="w-6 h-6 text-blue-600" />
+                      </div>
+                      <div className="text-3xl font-bold text-gray-900 mb-1">
+                        {upcomingAppointments.filter(apt => {
+                          const appointmentDate = new Date(apt.date);
+                          const today = new Date();
+                          return appointmentDate.toDateString() === today.toDateString();
+                        }).length}
+                      </div>
+                      <div className="text-gray-600 text-sm font-medium">Today's Appointments</div>
+                    </div>
+                    <div className="text-blue-600 text-right">
+                      <div className="text-xs text-gray-500 mb-1">Next 3 Hours</div>
+                      <div className="text-lg font-semibold">Ready</div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+              
+              <Card className="bg-white border-0 shadow-lg hover:shadow-xl transition-all duration-300 rounded-xl">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="bg-purple-100 p-3 rounded-xl mb-3">
+                        <UserIcon className="w-6 h-6 text-purple-600" />
+                      </div>
+                      <div className="text-3xl font-bold text-gray-900 mb-1">
+                        {upcomingAppointments.filter(apt => {
+                          const appointmentDate = new Date(apt.date);
+                          const nextWeek = new Date();
+                          nextWeek.setDate(nextWeek.getDate() + 7);
+                          return appointmentDate <= nextWeek;
+                        }).length}
+                      </div>
+                      <div className="text-gray-600 text-sm font-medium">Next 7 Days</div>
+                    </div>
+                    <div className="text-purple-600 text-right">
+                      <div className="text-xs text-gray-500 mb-1">Upcoming</div>
+                      <div className="text-lg font-semibold">Planned</div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+
+            {/* Enhanced Filter and Sort Controls */}
+            <div className="bg-white border-0 shadow-lg rounded-xl p-6">
+              <div className="flex flex-col space-y-4">
+                {/* Header Row */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="bg-orange-100 p-2.5 rounded-xl">
+                      <AdjustmentsHorizontalIcon className="w-5 h-5 text-orange-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-gray-900">Manage Appointments</h3>
+                      <p className="text-sm text-gray-600">Filter, sort, and organize your appointments</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Controls Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Search Bar */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 flex items-center">
+                      <MagnifyingGlassIcon className="w-4 h-4 mr-1.5 text-orange-600" />
+                      Search Appointments
+                    </label>
+                    <div className="relative">
+                      <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                      <input 
+                        type="text" 
+                        placeholder="Search by doctor name, specialty, or appointment notes..."
+                        className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white text-gray-700 font-medium shadow-sm hover:shadow-md transition-all duration-200"
+                        value={scheduleSearch}
+                        onChange={(e) => handleFilterChange('search', e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Filter Options */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 flex items-center">
+                      <FunnelIcon className="w-4 h-4 mr-1.5 text-orange-600" />
+                      Filter by Status
+                    </label>
+                    <select 
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white text-gray-700 font-medium shadow-sm hover:shadow-md transition-all duration-200"
+                      value={scheduleFilter}
+                      onChange={(e) => handleFilterChange('filter', e.target.value)}
+                    >
+                      <option value="all">All Appointments</option>
+                      <option value="upcoming">Upcoming Only</option>
+                      <option value="today">Today's Appointments</option>
+                      <option value="week">This Week</option>
+                      <option value="month">This Month</option>
+                      <option value="completed">Completed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+
+                  {/* Sort Options */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 flex items-center">
+                      <ChartBarIcon className="w-4 h-4 mr-1.5 text-orange-600" />
+                      Sort by
+                    </label>
+                    <select 
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white text-gray-700 font-medium shadow-sm hover:shadow-md transition-all duration-200"
+                      value={scheduleSort}
+                      onChange={(e) => handleFilterChange('sort', e.target.value)}
+                    >
+                      <option value="date-asc">Date (Earliest First)</option>
+                      <option value="date-desc">Date (Latest First)</option>
+                      <option value="doctor">Doctor Name</option>
+                      <option value="specialty">Specialty</option>
+                      <option value="status">Status</option>
+                      <option value="created">Date Created</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Detailed Appointments List */}
+            <Card className="bg-white border-0 shadow-lg rounded-xl">
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center space-x-3">
+                    <div className="bg-orange-100 p-2 rounded-lg">
+                      <CalendarDaysIcon className="w-6 h-6 text-orange-600" />
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-900">Upcoming Appointments</h3>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    {isLoadingSchedules && (
+                      <div className="flex items-center text-sm text-gray-500">
+                        <ArrowPathIcon className="w-4 h-4 mr-2 animate-spin" />
+                        Loading...
+                      </div>
+                    )}
+                    <Button 
+                      className={`bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-full font-medium shadow-md hover:shadow-lg transition-all duration-300 flex items-center text-sm ${
+                        isLoadingSchedules ? 'opacity-75 cursor-not-allowed' : ''
+                      }`}
+                      onClick={refreshMySchedules}
+                      disabled={isLoadingSchedules}
+                    >
+                      <ArrowPathIcon className={`w-4 h-4 mr-1 ${isLoadingSchedules ? 'animate-spin' : ''}`} />
+                      {isLoadingSchedules ? 'Refreshing...' : 'Refresh'}
+                    </Button>
+                  </div>
+                </div>
+                
+                {isLoadingSchedules ? (
+                  <div className="text-center py-16">
+                    <div className="bg-blue-100 p-4 rounded-full w-20 h-20 mx-auto mb-4 flex items-center justify-center">
+                      <ArrowPathIcon className="w-10 h-10 text-blue-600 animate-spin" />
+                    </div>
+                    <h4 className="text-xl font-semibold text-gray-900 mb-2">Loading Appointments</h4>
+                    <p className="text-gray-500">Please wait while we fetch your latest appointments...</p>
+                  </div>
+                ) : getFilteredAppointments().length === 0 ? (
+                  <div className="text-center py-16">
+                    <div className="bg-gray-100 p-4 rounded-full w-20 h-20 mx-auto mb-4 flex items-center justify-center">
+                      <CalendarDaysIcon className="w-10 h-10 text-gray-400" />
+                    </div>
+                    {upcomingAppointments.length === 0 ? (
+                      <>
+                        <h4 className="text-xl font-semibold text-gray-900 mb-2">No Appointments Scheduled</h4>
+                        <p className="text-gray-500 mb-6 max-w-md mx-auto">You don't have any upcoming appointments. Book your first appointment to get started with your healthcare journey.</p>
+                      </>
+                    ) : (
+                      <>
+                        <h4 className="text-xl font-semibold text-gray-900 mb-2">No Appointments Match Your Filters</h4>
+                        <p className="text-gray-500 mb-6 max-w-md mx-auto">Try adjusting your search terms or filters to see more appointments.</p>
+                      </>
+                    )}
+                    <Button 
+                      onClick={() => upcomingAppointments.length === 0 ? setActiveTab('appointments') : resetFilters()}
+                      className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-lg font-medium"
+                    >
+                      <PlusIcon className="w-5 h-5 mr-2" />
+                      {upcomingAppointments.length === 0 ? 'Book Your First Appointment' : 'Clear Filters'}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {getFilteredAppointments().map((appointment, index) => {
+                      const appointmentDate = new Date(appointment.date);
+                      const isToday = appointmentDate.toDateString() === new Date().toDateString();
+                      const isUpcoming = appointmentDate > new Date();
+                      
+                      return (
+                        <div key={appointment._id} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border border-gray-100 hover:border-orange-200">
+                          <div className="p-4">
+                            {/* Compact Header with Doctor Info */}
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center space-x-3">
+                                <img 
+                                  src={appointment.doctorId?.profileImage || 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1000&q=80'} 
+                                  alt={appointment.doctor || 'Doctor'}
+                                  className="w-12 h-12 rounded-full object-cover border-2 border-orange-100"
+                                />
+                                <div className="flex-1">
+                                  <h3 className="text-lg font-bold text-gray-900">
+                                    {appointment.doctor || 'Unknown Doctor'}
+                                  </h3>
+                                  <p className="text-sm text-gray-600">
+                                    {appointment.specialty || 'General Practice'} • {appointment.experience || 'N/A'} years exp.
+                                  </p>
+                                </div>
+                              </div>
+                              <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                isToday ? 'bg-emerald-500 text-white' :
+                                isUpcoming ? 'bg-blue-500 text-white' : 'bg-gray-500 text-white'
+                              }`}>
+                                {isToday ? 'TODAY' : isUpcoming ? 'UPCOMING' : 'PAST'}
+                              </span>
+                            </div>
+
+                            {/* Compact Date & Time Info */}
+                            <div className="flex items-center justify-between mb-4 p-3 bg-gray-50 rounded-lg">
+                              <div className="flex items-center space-x-4">
+                                <div className="flex items-center text-sm text-gray-700">
+                                  <CalendarDaysIcon className="w-4 h-4 mr-2 text-orange-600" />
+                                  <span className="font-medium">
+                                    {appointmentDate.toLocaleDateString('en-US', {
+                                      weekday: 'short',
+                                      month: 'short',
+                                      day: 'numeric'
+                                    })}
+                                  </span>
+                                </div>
+                                <div className="flex items-center text-sm text-gray-700">
+                                  <ClockIcon className="w-4 h-4 mr-2 text-orange-600" />
+                                  <span className="font-medium">{appointment.timeSlot}</span>
+                                </div>
+                                <div className={`text-sm font-medium ${
+                                  appointment.status === 'confirmed' ? 'text-emerald-600' :
+                                  appointment.status === 'pending' ? 'text-yellow-600' : 'text-red-600'
+                                }`}>
+                                  {appointment.status?.charAt(0).toUpperCase() + appointment.status?.slice(1)}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Compact Action Buttons */}
+                            <div className="flex flex-wrap gap-2">
+                              <Button 
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
+                                onClick={() => handleJoinCall(appointment)}
+                              >
+                                <VideoCameraIcon className="w-4 h-4 mr-1" />
+                                Join Call
+                              </Button>
+                              
+                              <Button 
+                                className="bg-orange-600 hover:bg-orange-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
+                                onClick={() => handleViewDetails(appointment)}
+                              >
+                                <EyeIcon className="w-4 h-4 mr-1" />
+                                Details
+                              </Button>
+                              
+                              {isUpcoming && (
+                                <Button 
+                                  className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
+                                  onClick={() => handleCancelAppointment(appointment)}
+                                >
+                                  <XMarkIcon className="w-4 h-4 mr-1" />
+                                  Cancel
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            
+          </div>
+        );
+
       case 'appointments':
         return (
           <div className="space-y-6">
@@ -1217,15 +2423,15 @@ const PatientDashboard = () => {
                     <p className="text-blue-100 mt-2">Book, manage, and track your healthcare appointments</p>
                   </div>
                   <Button 
-                    className="bg-white text-blue-600 hover:bg-blue-50 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-semibold px-6 py-3"
+                    className="bg-white text-blue-600 hover:bg-blue-50 shadow-md hover:shadow-lg transition-all duration-300 font-semibold px-6 py-3"
                     onClick={() => {
-                      const availableDocs = availableDoctors;
+                      const availableDocs = availableDoctors.filter(doctor => !isScheduleTimeExpired(doctor));
                       if (availableDocs.length > 0) {
                         handleBookAppointment(availableDocs[0]);
                       } else {
                         Swal.fire({
                           title: 'No Doctors Available',
-                          text: 'No doctors are currently available. Please check back later.',
+                          text: 'No doctors are currently available or all schedules have ended. Please check back later.',
                           icon: 'info',
                           confirmButtonColor: '#3b82f6'
                         });
@@ -1343,6 +2549,7 @@ const PatientDashboard = () => {
                         </div>
                       )}
 
+                      
                       {/* Available Doctors for Selected Date */}
                       <div className="border-t border-blue-200 pt-4">
                         <div className="flex items-center justify-between mb-3">
@@ -1369,7 +2576,11 @@ const PatientDashboard = () => {
                         ) : selectedDateDoctors.length > 0 ? (
                           <div className="space-y-2 max-h-48 overflow-y-auto">
                             {selectedDateDoctors.map((doctor, index) => (
-                              <div key={index} className="bg-white rounded-lg p-3 border border-green-200 hover:border-green-300 transition-colors">
+                              <div key={index} className={`bg-white rounded-lg p-3 border transition-colors ${
+                                doctor.scheduleStatus === 'ended' ? 'border-red-200 bg-red-50' :
+                                doctor.scheduleStatus === 'no_slots' ? 'border-yellow-200 bg-yellow-50' :
+                                'border-green-200 hover:border-green-300'
+                              }`}>
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center space-x-2">
                                     <div className={`w-8 h-8 bg-gradient-to-r ${doctor.color} rounded-full flex items-center justify-center text-white text-xs`}>
@@ -1382,30 +2593,227 @@ const PatientDashboard = () => {
                                         <svg className="w-3 h-3 mr-1 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
                                         {doctor.rating.toFixed(1)}
                                       </div>
+                                      {/* Online/Offline Status */}
+                                      <div className={`text-xs px-2 py-1 rounded-full mt-1 inline-flex items-center ${
+                                        doctor.isActive 
+                                          ? 'bg-green-100 text-green-700' 
+                                          : 'bg-gray-100 text-gray-700'
+                                      }`}>
+                                        <div className={`w-2 h-2 rounded-full mr-1 ${
+                                          doctor.isActive ? 'bg-green-500' : 'bg-gray-400'
+                                        }`}></div>
+                                        {doctor.isActive ? 'Online' : 'Offline'}
+                                      </div>
+                                      
+                                      {/* Schedule Status Badge */}
+                                      {doctor.scheduleStatus === 'ended' && (
+                                        <div className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full mt-1 inline-flex items-center">
+                                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                          </svg>
+                                          {doctor.expiredSlotsCount > 0 && doctor.availableSlotsCount === 0 ? 
+                                            'All slots have passed' : 'Schedule ended for today'
+                                          }
+                                        </div>
+                                      )}
+                                      {doctor.scheduleStatus === 'no_slots' && (
+                                        <div className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full mt-1 inline-flex items-center">
+                                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                          </svg>
+                                          No slots scheduled
+                                        </div>
+                                      )}
+                                      
+                                      {/* Offline Future Booking Notice */}
+                                      {!doctor.isActive && selectedDate && new Date(selectedDate) > new Date() && (
+                                        <div className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full mt-1 inline-flex items-center">
+                                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                          </svg>
+                                          Available for future booking
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                   <Button
                                     size="sm"
-                                    className="bg-green-500 hover:bg-green-600 text-white px-2 py-1 text-xs"
-                                    onClick={() => handleBookAppointment(doctor)}
+                                    className={`px-2 py-1 text-xs ${
+                                      doctor.scheduleStatus === 'ended' || 
+                                      doctor.scheduleStatus === 'no_slots' ||
+                                      isDateInPast(selectedDate) ||
+                                      isScheduleTimeExpired(doctor) ||
+                                      (!doctor.isActive && selectedDate && new Date(selectedDate) <= new Date())
+                                        ? 'bg-gray-400 cursor-not-allowed text-white' 
+                                        : 'bg-green-500 hover:bg-green-600 text-white'
+                                    }`}
+                                    onClick={() => {
+                                      const canBook = !isDateInPast(selectedDate) && 
+                                                     !isScheduleTimeExpired(doctor) &&
+                                                     (doctor.scheduleStatus === 'available' || 
+                                                     (!doctor.isActive && selectedDate && new Date(selectedDate) > new Date()));
+                                      if (canBook) handleBookAppointment(doctor);
+                                    }}
+                                    disabled={doctor.scheduleStatus === 'ended' || 
+                                             doctor.scheduleStatus === 'no_slots' ||
+                                             isDateInPast(selectedDate) ||
+                                             isScheduleTimeExpired(doctor) ||
+                                             (!doctor.isActive && selectedDate && new Date(selectedDate) <= new Date())}
                                   >
-                                    Book
+                                    {isDateInPast(selectedDate) ? 'Past Date' :
+                                     isScheduleTimeExpired(doctor) ? 'Not Available' :
+                                     doctor.scheduleStatus === 'ended' ? 'Ended' :
+                                     doctor.scheduleStatus === 'no_slots' ? 'No Slots' :
+                                     !doctor.isActive && selectedDate && new Date(selectedDate) <= new Date() ? 'Offline' :
+                                     'Book'}
                                   </Button>
                                 </div>
-                                {doctor.availableTimes && doctor.availableTimes.length > 0 && (
+                                {/* Show all time slots with status-based styling - only if not past date and schedule not expired */}
+                                {doctor.slotsWithStatus && 
+                                 doctor.slotsWithStatus.length > 0 && 
+                                 !isDateInPast(selectedDate) && 
+                                 !isScheduleTimeExpired(doctor) && (
                                   <div className="mt-2 pt-2 border-t border-green-100">
-                                    <div className="text-xs text-green-600 mb-1">Available Times:</div>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <div className="text-xs text-green-600">
+                                        Available Time Slots ({doctor.availableSlotsCount} of {doctor.totalSlots})
+                                      </div>
+                                      <div className="text-xs text-gray-600">
+                                        <span className="ml-1">{doctor.slotDuration || 30} min each</span>
+                                      </div>
+                                    </div>
                                     <div className="flex flex-wrap gap-1">
-                                      {doctor.availableTimes.slice(0, 3).map((time, timeIndex) => (
-                                        <span key={timeIndex} className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">
-                                          {time}
-                                        </span>
-                                      ))}
-                                      {doctor.availableTimes.length > 3 && (
-                                        <span className="text-xs text-green-600">
-                                          +{doctor.availableTimes.length - 3} more
-                                        </span>
+                                      {(expandedSlots[doctor.id] 
+                                        ? doctor.slotsWithStatus 
+                                        : doctor.slotsWithStatus.slice(0, 6)
+                                      ).map((slot, timeIndex) => {
+                                        const displayTime = slot.timeSlot || `${slot.startTime}-${slot.endTime}`;
+                                        
+                                        // Determine styling based on slot status
+                                        let slotClassName, statusIcon, isClickable;
+                                        
+                                        switch (slot.status) {
+                                          case 'available':
+                                            slotClassName = "text-xs bg-green-100 text-green-700 px-2 py-1 rounded flex items-center gap-1 cursor-pointer hover:bg-green-200 transition-colors";
+                                            statusIcon = <ClockIcon className="h-2 w-2" />;
+                                            isClickable = true;
+                                            break;
+                                          case 'expired':
+                                            slotClassName = "text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded flex items-center gap-1 cursor-not-allowed opacity-60";
+                                            statusIcon = <svg className="h-2 w-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+                                            isClickable = false;
+                                            break;
+                                          case 'booked':
+                                            slotClassName = "text-xs bg-red-100 text-red-700 px-2 py-1 rounded flex items-center gap-1 cursor-not-allowed";
+                                            statusIcon = <svg className="h-2 w-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>;
+                                            isClickable = false;
+                                            break;
+                                          default:
+                                            slotClassName = "text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded flex items-center gap-1";
+                                            statusIcon = <ClockIcon className="h-2 w-2" />;
+                                            isClickable = false;
+                                        }
+                                        
+                                        return (
+                                          <span 
+                                            key={timeIndex} 
+                                            className={slotClassName}
+                                            title={slot.status === 'expired' ? 'Time has passed' : 
+                                                   slot.status === 'booked' ? 'Already booked' : 
+                                                   slot.status === 'available' ? 'Available for booking' : ''}
+                                          >
+                                            {statusIcon}
+                                            {displayTime}
+                                          </span>
+                                        );
+                                      })}
+                                      {doctor.slotsWithStatus.length > 6 && !expandedSlots[doctor.id] && (
+                                        <button
+                                          onClick={() => toggleExpandedSlots(doctor.id)}
+                                          className="text-xs text-green-600 bg-green-50 hover:bg-green-100 px-2 py-1 rounded border border-green-200 hover:border-green-300 transition-colors cursor-pointer"
+                                        >
+                                          +{doctor.slotsWithStatus.length - 6} more
+                                        </button>
                                       )}
+                                      {expandedSlots[doctor.id] && doctor.slotsWithStatus.length > 6 && (
+                                        <button
+                                          onClick={() => toggleExpandedSlots(doctor.id)}
+                                          className="text-xs text-green-600 bg-green-50 hover:bg-green-100 px-2 py-1 rounded border border-green-200 hover:border-green-300 transition-colors cursor-pointer flex items-center gap-1"
+                                        >
+                                          <XMarkIcon className="h-2 w-2" />
+                                          less
+                                        </button>
+                                      )}
+                                    </div>
+                                    {/* Slot status legend */}
+                                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                      {doctor.availableSlotsCount > 0 && (
+                                        <div className="flex items-center gap-1">
+                                          <span className="w-2 h-2 bg-green-500 rounded"></span>
+                                          <span className="text-green-600">{doctor.availableSlotsCount} Available</span>
+                                        </div>
+                                      )}
+                                      {doctor.bookedSlotsCount > 0 && (
+                                        <div className="flex items-center gap-1">
+                                          <span className="w-2 h-2 bg-red-500 rounded"></span>
+                                          <span className="text-red-600">{doctor.bookedSlotsCount} Booked</span>
+                                        </div>
+                                      )}
+                                      {doctor.expiredSlotsCount > 0 && (
+                                        <div className="flex items-center gap-1">
+                                          <span className="w-2 h-2 bg-gray-500 rounded"></span>
+                                          <span className="text-gray-500">{doctor.expiredSlotsCount} Expired</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Show message when slots are hidden due to past date or expired schedule */}
+                                {doctor.slotsWithStatus && 
+                                 doctor.slotsWithStatus.length > 0 && 
+                                 (isDateInPast(selectedDate) || isScheduleTimeExpired(doctor)) && (
+                                  <div className="mt-2 pt-2 border-t border-gray-200">
+                                    <div className="text-xs text-gray-600 flex items-center">
+                                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      {isDateInPast(selectedDate) ? 
+                                        'Appointment slots not available for past dates' :
+                                        'Schedule time period has ended - not available for booking'
+                                      }
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Show message for ended or no slots */}
+                                {doctor.scheduleStatus === 'ended' && (
+                                  <div className="mt-2 pt-2 border-t border-red-200">
+                                    <div className="text-xs text-red-600 flex items-center">
+                                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      {doctor.expiredSlotsCount > 0 && doctor.availableSlotsCount === 0 ? 
+                                        'All appointment slots have passed their scheduled time' :
+                                        'All scheduled slots for today have passed'
+                                      }
+                                    </div>
+                                    {doctor.totalSlots > 0 && (
+                                      <div className="text-xs text-gray-500 mt-1">
+                                        Total slots: {doctor.totalSlots} | 
+                                        {doctor.bookedSlotsCount > 0 && ` Booked: ${doctor.bookedSlotsCount} |`}
+                                        {doctor.expiredSlotsCount > 0 && ` Expired/Unused: ${doctor.expiredSlotsCount}`}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {doctor.scheduleStatus === 'no_slots' && (
+                                  <div className="mt-2 pt-2 border-t border-yellow-200">
+                                    <div className="text-xs text-yellow-600 flex items-center">
+                                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      No appointment slots scheduled for this date
                                     </div>
                                   </div>
                                 )}
@@ -1516,15 +2924,16 @@ const PatientDashboard = () => {
                         
                         {/* Primary Action */}
                         <Button 
-                          className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg hover:shadow-xl transition-all duration-200 text-sm py-2.5 font-semibold"
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-xl transition-all duration-200 text-sm py-2.5 font-semibold"
                           onClick={() => {
                             setShowQuickActions(false);
-                            if (availableDoctors.length > 0) {
-                              handleBookAppointment(availableDoctors[0]);
+                            const availableDocs = availableDoctors.filter(doctor => !isScheduleTimeExpired(doctor));
+                            if (availableDocs.length > 0) {
+                              handleBookAppointment(availableDocs[0]);
                             } else {
                               Swal.fire({
                                 title: 'No Doctors Available',
-                                text: 'No doctors are currently available. Please check back later.',
+                                text: 'No doctors are currently available or all schedules have ended. Please check back later.',
                                 icon: 'info',
                                 confirmButtonColor: '#3b82f6'
                               });
@@ -1835,21 +3244,38 @@ const PatientDashboard = () => {
                                 </div>
                               </div>
                               <div className="text-right">
-                                <div className="text-sm font-medium text-purple-900 mb-1">
-                                  {doctor.availableTimes.length} slots
+                                <div className="text-xs text-purple-600 mb-1">
+                                  {doctor.slotDuration || 30} min slots
                                 </div>
+                                <div className="text-sm font-medium mb-1">
+                                  <span className="text-green-600">{doctor.availableSlotsCount || doctor.availableTimes.length}</span>
+                                  <span className="text-purple-600">/{doctor.totalSlots || doctor.availableTimes.length}</span>
+                                  <span className="text-gray-500 text-xs ml-1">available</span>
+                                </div>
+                                {doctor.bookedSlotsCount > 0 && (
+                                  <div className="text-xs text-red-600 mb-1">
+                                    {doctor.bookedSlotsCount} booked
+                                  </div>
+                                )}
                                 <div className="text-lg font-bold text-purple-700">
                                   ₹{doctor.consultationFee || '50'}
                                 </div>
                                 <Button
                                   size="sm"
+                                  disabled={isScheduleTimeExpired(doctor)}
                                   onClick={() => {
-                                    setSelectedDoctor(doctor);
-                                    setShowBookingModal(true);
+                                    if (!isScheduleTimeExpired(doctor)) {
+                                      setSelectedDoctor(doctor);
+                                      setShowBookingModal(true);
+                                    }
                                   }}
-                                  className="mt-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2 rounded-lg font-medium shadow-md"
+                                  className={`mt-2 px-4 py-2 rounded-lg font-medium shadow-md transition-all duration-200 ${
+                                    isScheduleTimeExpired(doctor)
+                                      ? 'bg-gray-400 text-gray-700 cursor-not-allowed opacity-60'
+                                      : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white hover:shadow-lg'
+                                  }`}
                                 >
-                                  Book Now
+                                  {isScheduleTimeExpired(doctor) ? 'Schedule Ended' : 'Book Now'}
                                 </Button>
                               </div>
                             </div>
@@ -1879,32 +3305,96 @@ const PatientDashboard = () => {
                             </div>
 
                             {/* Available Time Slots */}
-                            {doctor.availableTimes.length > 0 && (
+                            {doctor.availableTimes.length > 0 && 
+                             !isDateInPast(selectedDate) && 
+                             !isScheduleTimeExpired(doctor) ? (
                               <div>
                                 <h5 className="text-sm font-semibold text-purple-800 mb-3 flex items-center gap-2">
                                   <ClockIcon className="h-4 w-4" />
-                                  Available Time Slots ({doctor.availableTimes.length})
+                                  Available Time Slots ({doctor.availableSlotsCount || doctor.availableTimes.length} of {doctor.totalSlots || doctor.availableTimes.length})
+                                  <span className="text-xs text-purple-600 bg-purple-100 px-2 py-1 rounded-full">
+                                    {doctor.slotDuration || 30} min each
+                                  </span>
                                 </h5>
                                 <div className="flex flex-wrap gap-2">
-                                  {doctor.availableTimes.slice(0, 6).map((time, index) => (
+                                  {(expandedSlots[doctor.id] 
+                                    ? doctor.availableTimes 
+                                    : doctor.availableTimes.slice(0, 8)
+                                  ).map((time, index) => {
+                                    // Check if this is a time range (contains '-') or single time
+                                    const isTimeRange = time.includes('-');
+                                    const displayTime = isTimeRange ? time : time;
+                                    
+                                    return (
+                                      <button 
+                                        key={index} 
+                                        onClick={() => handleSlotSelection(doctor, displayTime, index)}
+                                        className="bg-gradient-to-r from-green-100 to-emerald-100 hover:from-green-200 hover:to-emerald-200 text-green-800 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 border border-green-200 hover:border-green-300 hover:shadow-sm flex items-center gap-1"
+                                        title={`Book appointment for ${displayTime} (${doctor.slotDuration || 30} minutes)`}
+                                      >
+                                        <ClockIcon className="h-3 w-3" />
+                                        {displayTime}
+                                      </button>
+                                    );
+                                  })}
+                                  {doctor.availableTimes.length > 8 && !expandedSlots[doctor.id] && (
                                     <button 
-                                      key={index} 
-                                      onClick={() => {
-                                        setSelectedDoctor(doctor);
-                                        setAppointmentData(prev => ({ ...prev, time: time }));
-                                        setShowBookingModal(true);
-                                      }}
-                                      className="bg-purple-100 hover:bg-purple-200 text-purple-800 px-3 py-2 rounded-lg text-sm font-medium transition-colors border border-purple-200 hover:border-purple-300"
+                                      onClick={() => toggleExpandedSlots(doctor.id)}
+                                      className="flex items-center text-purple-600 text-sm px-3 py-2 bg-purple-50 hover:bg-purple-100 rounded-lg border border-purple-200 hover:border-purple-300 transition-colors cursor-pointer"
                                     >
-                                      {time}
+                                      <PlusIcon className="h-3 w-3 mr-1" />
+                                      {doctor.availableTimes.length - 8} more slots
                                     </button>
-                                  ))}
-                                  {doctor.availableTimes.length > 6 && (
-                                    <div className="flex items-center text-purple-600 text-sm px-3 py-2">
-                                      +{doctor.availableTimes.length - 6} more slots
-                                    </div>
+                                  )}
+                                  {expandedSlots[doctor.id] && doctor.availableTimes.length > 8 && (
+                                    <button 
+                                      onClick={() => toggleExpandedSlots(doctor.id)}
+                                      className="flex items-center text-purple-600 text-sm px-3 py-2 bg-purple-50 hover:bg-purple-100 rounded-lg border border-purple-200 hover:border-purple-300 transition-colors cursor-pointer"
+                                    >
+                                      <XMarkIcon className="h-3 w-3 mr-1" />
+                                      Show less
+                                    </button>
                                   )}
                                 </div>
+                                
+                                {/* Slot Summary */}
+                                <div className="mt-3 flex items-center gap-4 text-xs">
+                                  <div className="flex items-center gap-1">
+                                    <div className="w-3 h-3 bg-green-200 rounded border border-green-300"></div>
+                                    <span className="text-green-700">{doctor.availableSlotsCount || doctor.availableTimes.length} Available</span>
+                                  </div>
+                                  {doctor.bookedSlotsCount > 0 && (
+                                    <div className="flex items-center gap-1">
+                                      <div className="w-3 h-3 bg-red-200 rounded border border-red-300"></div>
+                                      <span className="text-red-700">{doctor.bookedSlotsCount} Booked</span>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1">
+                                    <ClockIcon className="h-3 w-3 text-purple-600" />
+                                    <span className="text-purple-700">
+                                      {doctor.scheduleDetails.startTime} - {doctor.scheduleDetails.endTime}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
+                                <ClockIcon className="h-6 w-6 text-gray-400 mx-auto mb-2" />
+                                <p className="text-sm text-gray-600 mb-1">
+                                  {isDateInPast(selectedDate) ? 'Date has passed' :
+                                   isScheduleTimeExpired(doctor) ? 'Schedule time ended' :
+                                   'No available slots'}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {isDateInPast(selectedDate) ? 
+                                    'Appointment slots are not available for past dates' :
+                                   isScheduleTimeExpired(doctor) ?
+                                    'The doctor\'s schedule time period has ended for today' :
+                                   doctor.bookedSlotsCount > 0 ? 
+                                    `All ${doctor.totalSlots || 0} slots are booked for this day` : 
+                                    'Doctor has not set availability for this day'
+                                  }
+                                </p>
                               </div>
                             )}
                           </div>
@@ -1941,73 +3431,184 @@ const PatientDashboard = () => {
                
 
                 {/* Upcoming Appointments Section */}
-                <Card className="bg-white/90 backdrop-blur-sm border-0 shadow-xl">
+                <Card className="bg-white border border-gray-200 shadow-lg">
                   <div className="p-6">
-                    <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center">
-                      <CalendarDaysIcon className="w-6 h-6 mr-2 text-purple-600" />
-                      Your Upcoming Appointments
-                    </h3>
+                    <div className="flex items-center justify-between mb-6">
+                      <h3 className="text-xl font-bold text-gray-900 flex items-center">
+                        <CalendarDaysIcon className="w-6 h-6 mr-3 text-blue-600" />
+                        Your Upcoming Appointments
+                      </h3>
+                      <div className="flex items-center space-x-2">
+                        {upcomingAppointments.length > 2 && (
+                          <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                            {upcomingAppointments.length} total
+                          </span>
+                        )}
+                        {upcomingAppointments.length > 2 && (
+                          <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full border border-blue-200">
+                            Scroll to see more
+                          </span>
+                        )}
+                      </div>
+                    </div>
                     
                     {upcomingAppointments.length > 0 ? (
-                      <div className="space-y-4">
-                        {upcomingAppointments.map((appointment) => (
-                          <div key={appointment.id} className="relative overflow-hidden rounded-xl bg-gradient-to-r from-white via-purple-50 to-white p-6 border-2 border-purple-100 hover:border-purple-300 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
-                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                              <div className="flex items-center space-x-4">
-                                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg">
-                                  <UserIcon className="w-6 h-6" />
+                      <div className="relative">
+                        {/* Scrollable container with exact height for 2 appointments */}
+                        <div className="h-80 overflow-y-auto pr-2 space-y-4 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400">
+                          {upcomingAppointments.map((appointment, index) => (
+                            <div key={appointment.id} className="bg-white rounded-lg p-4 border border-gray-200 hover:border-blue-200 shadow-sm hover:shadow-md transition-all duration-300">
+                              {/* Header with doctor info */}
+                              <div className="flex items-center space-x-3 mb-3">
+                                <div className="relative">
+                                  <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-sm">
+                                    <UserIcon className="w-6 h-6" />
+                                  </div>
+                                  <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${
+                                    appointment.status === 'confirmed' ? 'bg-green-500' : 
+                                    appointment.status === 'pending' ? 'bg-yellow-500' : 
+                                    appointment.status === 'cancelled' ? 'bg-red-500' : 'bg-blue-500'
+                                  }`}></div>
                                 </div>
-                                <div>
-                                  <div className="font-bold text-lg text-gray-900">{appointment.doctor}</div>
-                                  <div className="text-sm text-gray-600">{appointment.specialty}</div>
-                                  <div className="flex items-center space-x-3 mt-1">
-                                    <span className="text-yellow-400 flex items-center"><svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>{appointment.rating}</span>
+                                <div className="flex-1">
+                                  <h4 className="font-bold text-gray-900 text-lg mb-1">{appointment.doctor}</h4>
+                                  <div className="flex items-center space-x-3">
+                                    <p className="text-gray-600 text-sm">{appointment.specialty}</p>
+                                    <div className="flex items-center">
+                                      <svg className="w-3 h-3 text-yellow-500 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path>
+                                      </svg>
+                                      <span className="text-xs font-medium text-gray-700">{appointment.rating}</span>
+                                    </div>
                                     <span className={`px-2 py-1 text-xs rounded-full font-medium ${
                                       appointment.status === 'confirmed' 
-                                        ? 'bg-green-100 text-green-700' 
-                                        : 'bg-yellow-100 text-yellow-700'
+                                        ? 'bg-green-100 text-green-800'
+                                        : appointment.status === 'pending'
+                                        ? 'bg-yellow-100 text-yellow-800'
+                                        : appointment.status === 'cancelled'
+                                        ? 'bg-red-100 text-red-800'
+                                        : 'bg-blue-100 text-blue-800'
                                     }`}>
                                       {appointment.status}
                                     </span>
                                   </div>
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <div className="font-bold text-lg text-gray-900">{appointment.date}</div>
-                                <div className="text-purple-600 font-semibold">{appointment.time}</div>
-                                <span className={`inline-flex px-3 py-1 text-sm rounded-full font-medium mt-2 items-center ${
-                                  appointment.type === 'Video Call' 
-                                    ? 'bg-blue-100 text-blue-700' 
-                                    : 'bg-green-100 text-green-700'
-                                }`}>
-                                  {appointment.type === 'Video Call' ? 
-                                    <VideoCameraIcon className="w-4 h-4 mr-1" /> : 
-                                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
-                                  }
-                                  {appointment.type}
-                                </span>
+
+                              {/* Compact Date, Time and Type Info */}
+                              <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-4">
+                                    <div>
+                                      <div className="text-xs text-gray-500 uppercase tracking-wide">Date</div>
+                                      <div className="font-semibold text-gray-900 text-sm">
+                                        {appointment.date ? new Date(appointment.date).toLocaleDateString('en-US', {
+                                          month: 'short',
+                                          day: 'numeric',
+                                          year: 'numeric'
+                                        }) : 'Date TBD'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-xs text-gray-500 uppercase tracking-wide">Time</div>
+                                      <div className="font-semibold text-blue-600 text-sm">
+                                        {appointment.time || appointment.timeSlot || 'Time TBD'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-xs text-gray-500 uppercase tracking-wide">Type</div>
+                                      <div className={`inline-flex items-center px-2 py-1 text-xs rounded-md font-medium ${
+                                        (appointment.type || appointment.appointmentType) === 'Video Call' || appointment.isOnline
+                                          ? 'bg-blue-100 text-blue-700' 
+                                          : 'bg-green-100 text-green-700'
+                                      }`}>
+                                        {(appointment.type || appointment.appointmentType) === 'Video Call' || appointment.isOnline ? 
+                                          <VideoCameraIcon className="w-3 h-3 mr-1" /> : 
+                                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                                          </svg>
+                                        }
+                                        {appointment.type || appointment.appointmentType || (appointment.isOnline ? 'Video Call' : 'In-Person')}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Compact Appointment Details */}
+                              {appointment.reason && (
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-3">
+                                  <div className="flex items-start space-x-2">
+                                    <svg className="w-3 h-3 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                    </svg>
+                                    <div>
+                                      <div className="text-xs text-blue-700 font-medium uppercase tracking-wide">Reason for Visit</div>
+                                      <p className="text-blue-800 text-sm">"{appointment.reason}"</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Action Buttons */}
+                              <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+                                <div className="flex space-x-2">
+                                  <button 
+                                    onClick={() => handleJoinCall(appointment)}
+                                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors duration-200 ${
+                                      (appointment.type === 'Video Call' || appointment.isOnline) && appointment.status === 'confirmed'
+                                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                    }`}
+                                  >
+                                    <VideoCameraIcon className="w-4 h-4 mr-1" />
+                                    Join Call
+                                  </button>
+                                  <button 
+                                    onClick={() => handleViewDetails(appointment)}
+                                    className="flex items-center px-3 py-1.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors duration-200"
+                                  >
+                                    <EyeIcon className="w-4 h-4 mr-1" />
+                                    Details
+                                  </button>
+                                </div>
+                                
+                                <div className="flex space-x-2">
+                                  <button 
+                                    onClick={() => handleCancelAppointment(appointment)}
+                                    className="flex items-center px-2 py-1.5 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors duration-200"
+                                  >
+                                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                    Cancel
+                                  </button>
+                                </div>
                               </div>
                             </div>
-                            <div className={`absolute top-0 right-0 w-2 h-full ${
-                              appointment.status === 'confirmed' ? 'bg-green-400' : 'bg-yellow-400'
-                            }`}></div>
+                          ))}
+                        </div>
+                        
+                        {/* Scroll indicator at bottom */}
+                        {upcomingAppointments.length > 2 && (
+                          <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none flex items-center justify-center">
+                            <div className="text-xs text-gray-400 bg-white px-2 py-1 rounded-full border border-gray-200">
+                              ↓ Scroll for more
+                            </div>
                           </div>
-                        ))}
+                        )}
                       </div>
                     ) : (
-                      <div className="text-center py-8">
-                        <CalendarDaysIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                      <div className="text-center py-12">
+                        <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                          <CalendarDaysIcon className="w-10 h-10 text-gray-400" />
+                        </div>
                         <h4 className="text-lg font-semibold text-gray-600 mb-2">No upcoming appointments</h4>
-                        <p className="text-gray-500 mb-4">Schedule your next appointment to maintain your health.</p>
+                        <p className="text-gray-500 mb-6">Schedule your next appointment to maintain your health.</p>
                         <Button 
-                          className="bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700"
-                          onClick={() => {
-                            if (availableDoctors.length > 0) {
-                              handleBookAppointment(availableDoctors[0]);
-                            }
-                          }}
+                          onClick={() => setActiveTab('appointments')}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors duration-200"
                         >
-                          <PlusIcon className="w-4 h-4 mr-2" />
                           Schedule Appointment
                         </Button>
                       </div>
@@ -2024,7 +3625,7 @@ const PatientDashboard = () => {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Vitals Tracker</h2>
-              <Button className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700">
+              <Button className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm">
                 Add New Reading
               </Button>
             </div>
@@ -2097,7 +3698,7 @@ const PatientDashboard = () => {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
                     />
                   </div>
-                  <Button className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700">
+                  <Button className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 rounded-lg">
                     Save Vitals
                   </Button>
                 </div>
@@ -2140,7 +3741,7 @@ const PatientDashboard = () => {
                 </svg>
                 Personalized Health Tips
               </h2>
-              <Button className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 shadow-lg hover:shadow-xl transition-all duration-300 flex items-center">
+              <Button className="bg-orange-600 hover:bg-orange-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 flex items-center font-medium px-4 py-2 rounded-lg">
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                 </svg>
@@ -2695,54 +4296,107 @@ const PatientDashboard = () => {
               <h3 className="text-xl font-bold text-gray-900 mb-2">Book Appointment</h3>
               <p className="text-gray-600">Schedule your visit with {selectedDoctor.name}</p>
               <p className="text-sm text-gray-500">{selectedDoctor.specialty}</p>
+              
+              {/* Selected Date Display */}
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="flex items-center justify-center gap-2">
+                  <CalendarDaysIcon className="h-4 w-4 text-blue-600" />
+                  <span className="text-sm font-medium text-blue-800">
+                    Appointment Date: {selectedDate.toLocaleDateString('en-US', { 
+                      weekday: 'long', 
+                      year: 'numeric', 
+                      month: 'long', 
+                      day: 'numeric' 
+                    })}
+                  </span>
+                </div>
+                {/* {selectedSlotDetails && selectedSlotDetails.timeSlot && (
+                  <div className="mt-2 flex items-center justify-center gap-2">
+                    <ClockIcon className="h-4 w-4 text-green-600" />
+                    <span className="text-sm font-medium text-green-800">
+                      Selected Time: {selectedSlotDetails.timeSlot} ({selectedSlotDetails.slotDuration} minutes)
+                    </span>
+                  </div>
+                )} */}
+              </div>
             </div>
             
             {/* Form */}
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Appointment Date</label>
-                <input
-                  type="date"
-                  value={appointmentData.date}
-                  onChange={(e) => setAppointmentData({...appointmentData, date: e.target.value})}
-                  min={new Date().toISOString().split('T')[0]}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
+              
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Preferred Time</label>
-                <select
-                  value={appointmentData.time}
-                  onChange={(e) => setAppointmentData({...appointmentData, time: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="">Select time</option>
-                  {selectedDoctor && selectedDoctor.availability && selectedDoctor.availability.dailySchedule 
-                    ? generateTimeSlots(selectedDoctor.availability.dailySchedule).map((slot) => (
-                        <option key={slot.value} value={slot.value}>
-                          {slot.label}
-                        </option>
-                      ))
-                    : (
-                      // Fallback options if no schedule data available
-                      <>
-                        <option value="09:00">09:00 - 09:30 AM</option>
-                        <option value="09:30">09:30 - 10:00 AM</option>
-                        <option value="10:00">10:00 - 10:30 AM</option>
-                        <option value="10:30">10:30 - 11:00 AM</option>
-                        <option value="11:00">11:00 - 11:30 AM</option>
-                        <option value="11:30">11:30 - 12:00 PM</option>
-                        <option value="14:00">02:00 - 02:30 PM</option>
-                        <option value="14:30">02:30 - 03:00 PM</option>
-                        <option value="15:00">03:00 - 03:30 PM</option>
-                        <option value="15:30">03:30 - 04:00 PM</option>
-                        <option value="16:00">04:00 - 04:30 PM</option>
-                        <option value="16:30">04:30 - 05:00 PM</option>
-                      </>
-                    )
-                  }
-                </select>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Available Time Slots
+                  <span className="text-xs text-gray-500 ml-2">
+                    ({selectedDoctor.slotDuration || 30} min each)
+                  </span>
+                </label>
+                
+                {/* Current Selection Display */}
+                {/* {appointmentData.time && (
+                  <div className="mb-3 p-2 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <CheckCircleIcon className="h-4 w-4 text-green-600" />
+                      <span className="text-sm font-medium text-green-800">
+                        Selected: {appointmentData.time}
+                      </span>
+                    </div>
+                  </div>
+                )} */}
+                
+                {/* Time Slot Buttons */}
+                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+                  {selectedDoctor.availableTimes && selectedDoctor.availableTimes.length > 0 ? (
+                    selectedDoctor.availableTimes.map((timeSlot, index) => {
+                      // Parse the timeSlot to get start and end times
+                      const [startTime, endTime] = timeSlot.includes('-') ? timeSlot.split('-') : [timeSlot, ''];
+                      const displayTime = endTime ? `${startTime} - ${endTime}` : startTime;
+                      
+                      return (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => setAppointmentData({...appointmentData, time: timeSlot})}
+                          className={`p-3 text-sm rounded-lg border transition-all duration-200 ${
+                            appointmentData.time === timeSlot
+                              ? 'bg-blue-500 text-white border-blue-500 shadow-md ring-2 ring-blue-200'
+                              : 'bg-white text-gray-700 border-gray-300 hover:border-blue-300 hover:bg-blue-50'
+                          }`}
+                        >
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="flex items-center gap-1">
+                              <ClockIcon className="h-3 w-3" />
+                              <span className="font-medium">{startTime}</span>
+                            </div>
+                            {endTime && (
+                              <span className="text-xs opacity-75">
+                                {selectedDoctor.slotDuration || 30} min
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="col-span-2 text-center py-4">
+                      <ClockIcon className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">No available time slots</p>
+                      <p className="text-xs text-gray-400">Please select a different date</p>
+                    </div>
+                  )}
+                </div>
+                
+                {selectedDoctor.availableTimes && selectedDoctor.availableTimes.length > 0 && (
+                  <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                    <span>
+                      {selectedDoctor.availableSlotsCount || selectedDoctor.availableTimes.length} available slots
+                    </span>
+                    <span>
+                      Total: {selectedDoctor.totalSlots || selectedDoctor.availableTimes.length} slots
+                    </span>
+                  </div>
+                )}
               </div>
               
               <div>
@@ -2771,10 +4425,21 @@ const PatientDashboard = () => {
               </div>
             </div>
             
+            
+            
             {/* Buttons */}
             <div className="flex space-x-3 mt-6">
               <Button
-                onClick={() => setShowBookingModal(false)}
+                onClick={() => {
+                  setShowBookingModal(false);
+                  // Reset appointment data if needed
+                  setAppointmentData({
+                    date: '',
+                    time: '',
+                    reason: '',
+                    type: 'consultation'
+                  });
+                }}
                 variant="outline"
                 className="flex-1 border-gray-300 text-gray-700 hover:bg-gray-50"
               >
@@ -2782,11 +4447,28 @@ const PatientDashboard = () => {
               </Button>
               <Button
                 onClick={submitAppointmentBooking}
-                className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
+                disabled={!appointmentData.time || !appointmentData.reason.trim()}
+                className={`flex-1 transition-all duration-200 ${
+                  !appointmentData.time || !appointmentData.reason.trim()
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white hover:shadow-lg'
+                }`}
               >
-                Book Appointment
+                {!appointmentData.time ? 'Select Time Slot' : 
+                 !appointmentData.reason.trim() ? 'Add Reason' : 
+                 'Book Appointment'}
               </Button>
             </div>
+            
+            {/* Validation Message */}
+            {(!appointmentData.time || !appointmentData.reason.trim()) && (
+              <div className="mt-2 text-center">
+                <p className="text-xs text-red-700">
+                  {!appointmentData.time && 'Please select a time slot. '}
+                  {!appointmentData.reason.trim() && 'Please provide a reason for your visit.'}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

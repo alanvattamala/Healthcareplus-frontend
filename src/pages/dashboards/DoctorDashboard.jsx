@@ -9,6 +9,8 @@ import {
   BellIcon,
   UserIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ArrowRightOnRectangleIcon,
   Cog6ToothIcon,
   HomeIcon,
@@ -30,7 +32,13 @@ import {
   ArchiveBoxIcon,
   PlusIcon,
   LightBulbIcon,
-  SparklesIcon
+  SparklesIcon,
+  CalendarIcon,
+  XCircleIcon,
+  VideoCameraIcon,
+  BuildingOfficeIcon,
+  PencilIcon,
+  UserGroupIcon
 } from '@heroicons/react/24/outline';
 
 const DoctorDashboard = () => {
@@ -100,12 +108,31 @@ const DoctorDashboard = () => {
   const [showScheduleSetupModal, setShowScheduleSetupModal] = useState(false);
   const [scheduleSetup, setScheduleSetup] = useState({
     startTime: '',
-    endTime: ''
+    endTime: '',
+    totalSlots: 6
   });
   const [scheduleSetupError, setScheduleSetupError] = useState('');
 
+  // Today's Schedule Slot Configuration
+  const [todaySlots, setTodaySlots] = useState({
+    totalSlots: 6
+  });
+
   // Go online confirmation modal state
   const [showGoOnlineModal, setShowGoOnlineModal] = useState(false);
+
+  // Calendar and appointment management state
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [appointments, setAppointments] = useState([]);
+  const [allAppointments, setAllAppointments] = useState([]);
+  const [loadingAppointments, setLoadingAppointments] = useState(false);
+  const [appointmentStats, setAppointmentStats] = useState({
+    total: 0,
+    completed: 0,
+    pending: 0,
+    noShow: 0
+  });
+  const [appointmentsByDate, setAppointmentsByDate] = useState({}); // Track appointments by date
   const [goOnlineModalData, setGoOnlineModalData] = useState({
     title: '',
     message: '',
@@ -125,6 +152,14 @@ const DoctorDashboard = () => {
   const [completedSchedules, setCompletedSchedules] = useState({});
   const [scheduleLoading, setScheduleLoading] = useState(false);
 
+  // Slot Management State
+  const [defaultSlots, setDefaultSlots] = useState({
+    totalSlots: 6,
+    customSlots: false
+  });
+  const [customSlotSettings, setCustomSlotSettings] = useState({});
+  const [showSlotPreview, setShowSlotPreview] = useState(false);
+
   // Helper function to format date as YYYY-MM-DD without timezone issues
   const formatDateString = (date) => {
     const year = date.getFullYear();
@@ -140,6 +175,587 @@ const DoctorDashboard = () => {
     // Extract the UTC date components to avoid timezone conversion
     const utcDate = new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
     return utcDate.toLocaleDateString('en-US', options);
+  };
+
+  // Slot Management Helper Functions
+  const calculateSlotDuration = (startTime, endTime, totalSlots) => {
+    const start = new Date(`1970-01-01T${startTime}:00`);
+    const end = new Date(`1970-01-01T${endTime}:00`);
+    const totalMinutes = (end - start) / (1000 * 60);
+    return Math.floor(totalMinutes / totalSlots);
+  };
+
+  const generateTimeSlots = (startTime, endTime, totalSlots) => {
+    const slots = [];
+    const slotDuration = calculateSlotDuration(startTime, endTime, totalSlots);
+    
+    for (let i = 0; i < totalSlots; i++) {
+      const startMinutes = i * slotDuration;
+      const endMinutes = (i + 1) * slotDuration;
+      
+      const slotStartTime = addMinutesToTime(startTime, startMinutes);
+      const slotEndTime = addMinutesToTime(startTime, endMinutes);
+      
+      slots.push({
+        slotNumber: i + 1,
+        startTime: slotStartTime,
+        endTime: slotEndTime,
+        duration: slotDuration,
+        isBooked: false,
+        patientId: null,
+        bookingTime: null,
+        createdAt: new Date().toISOString(),
+        status: 'available' // available, booked, cancelled, completed
+      });
+    }
+    
+    return slots;
+  };
+
+  const addMinutesToTime = (timeString, minutes) => {
+    const [hours, mins] = timeString.split(':').map(Number);
+    const totalMinutes = hours * 60 + mins + minutes;
+    const newHours = Math.floor(totalMinutes / 60);
+    const newMins = totalMinutes % 60;
+    return `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}`;
+  };
+
+  const getSlotsForDate = (dateStr) => {
+    if (scheduleMode === 'custom' && customSlotSettings[dateStr]) {
+      const customSettings = customSlotSettings[dateStr];
+      const schedule = customSchedules[dateStr] || defaultTimes;
+      return generateTimeSlots(
+        schedule.startTime, 
+        schedule.endTime, 
+        customSettings.customSlots ? customSettings.totalSlots : defaultSlots.totalSlots
+      );
+    } else {
+      const schedule = customSchedules[dateStr] || defaultTimes;
+      return generateTimeSlots(
+        schedule.startTime,
+        schedule.endTime,
+        defaultSlots.totalSlots
+      );
+    }
+  };
+
+  // Validation function for minimum slot duration
+  const validateSlotDuration = (startTime, endTime, totalSlots) => {
+    if (!startTime || !endTime || !totalSlots) return null;
+    
+    const duration = calculateSlotDuration(startTime, endTime, totalSlots);
+    const minDuration = 10; // minimum 10 minutes per slot
+    
+    if (duration < minDuration) {
+      const start = new Date(`1970-01-01T${startTime}:00`);
+      const end = new Date(`1970-01-01T${endTime}:00`);
+      const totalMinutes = (end - start) / (1000 * 60);
+      const maxSlots = Math.floor(totalMinutes / minDuration);
+      
+      return {
+        isValid: false,
+        currentDuration: duration,
+        minDuration,
+        maxSlots,
+        totalMinutes,
+        message: `Slot duration is ${duration} minutes. Minimum required is ${minDuration} minutes. Maximum slots allowed: ${maxSlots}`
+      };
+    }
+    
+    return {
+      isValid: true,
+      currentDuration: duration,
+      minDuration,
+      message: null
+    };
+  };
+
+  // Helper function to get maximum allowed slots for a time range
+  const getMaxSlotsForTimeRange = (startTime, endTime) => {
+    if (!startTime || !endTime) return 50; // default max
+    
+    const start = new Date(`1970-01-01T${startTime}:00`);
+    const end = new Date(`1970-01-01T${endTime}:00`);
+    const totalMinutes = (end - start) / (1000 * 60);
+    return Math.floor(totalMinutes / 10); // 10 minutes minimum per slot
+  };
+
+  // Helper function to check if a time conflicts with existing schedule
+  const doesTimeConflict = (dateStr, newStartTime, newEndTime) => {
+    const existingSchedule = existingSchedules[dateStr];
+    if (!existingSchedule) return false;
+
+    const existingStart = new Date(`1970-01-01T${existingSchedule.startTime}:00`);
+    const existingEnd = new Date(`1970-01-01T${existingSchedule.endTime}:00`);
+    const newStart = new Date(`1970-01-01T${newStartTime}:00`);
+    const newEnd = new Date(`1970-01-01T${newEndTime}:00`);
+
+    // Check for any overlap
+    return newStart < existingEnd && newEnd > existingStart;
+  };
+
+  // Helper function to get available time ranges for a date
+  const getAvailableTimeRanges = (dateStr) => {
+    const existingSchedule = existingSchedules[dateStr];
+    if (!existingSchedule) {
+      return [{ start: '00:00', end: '23:59', label: 'Full day available' }];
+    }
+
+    return []; // Return empty array for now - can be enhanced later
+  };
+
+  // Function to fetch appointments from database
+  const fetchAppointments = async (date) => {
+    setLoadingAppointments(true);
+    try {
+      const user = getCurrentUser();
+      console.log('🔍 Fetching appointments for user:', user);
+      console.log('🔍 User ID from token:', user?.id);
+      console.log('🔍 Expected doctor ID: 68be4e30959824f4ea581be7');
+      console.log('🔍 Doctor ID match:', user?.id === '68be4e30959824f4ea581be7');
+      
+      if (!user || !user.id) {
+        throw new Error('User not authenticated');
+      }
+
+      const dateString = date.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      const apiUrl = `http://localhost:3000/api/appointments/doctor-appointments?date=${dateString}`;
+      const token = localStorage.getItem('token');
+      
+      console.log('📅 Fetching appointments for date:', dateString);
+      console.log('📅 Is today (2025-10-15):', dateString === '2025-10-15');
+      console.log('🌐 API URL:', apiUrl);
+      console.log('🔑 Token exists:', !!token);
+      console.log('🔑 Token preview:', token ? `${token.substring(0, 20)}...` : 'No token');
+      
+      // Test server connectivity first
+      console.log('🔗 Testing server connection...');
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      console.log('📡 Response status:', response.status);
+      console.log('📡 Response ok:', response.ok);
+      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ API Error:', response.status, errorText);
+        
+        // Try to parse error as JSON for more details
+        try {
+          const errorJson = JSON.parse(errorText);
+          console.error('❌ Parsed error:', errorJson);
+        } catch (e) {
+          console.error('❌ Raw error text:', errorText);
+        }
+        
+        throw new Error(`Failed to fetch appointments: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ API Response:', result);
+      console.log('✅ Raw appointment data:', JSON.stringify(result.data, null, 2));
+      
+      // Check for the specific appointment you mentioned
+      const targetAppointmentId = '68eeb385b0e5d3ad6c725ca1';
+      const foundTargetAppointment = result.data?.find(apt => apt._id === targetAppointmentId);
+      if (foundTargetAppointment) {
+        console.log('🎯 FOUND TARGET APPOINTMENT:', foundTargetAppointment);
+      } else {
+        console.log('❌ Target appointment not found. Available appointments:', result.data?.map(apt => ({ id: apt._id, date: apt.date, doctor: apt.doctor })));
+      }
+      
+      // Transform the appointment data to match our component structure
+      const transformedAppointments = result.data?.map(appointment => {
+        console.log('🔄 Transforming individual appointment:', {
+          id: appointment._id,
+          rawPatient: appointment.patient,
+          patientType: typeof appointment.patient,
+          patientKeys: appointment.patient ? Object.keys(appointment.patient) : 'null'
+        });
+        
+        // Extract patient information - could be populated object or just ID
+        let patientName = 'Unknown Patient';
+        let patientEmail = 'No email';
+        let patientPhone = 'No phone';
+        let patientGender = 'Not specified';
+        let patientId = 'N/A';
+
+        if (appointment.patient) {
+          if (typeof appointment.patient === 'object' && appointment.patient.firstName) {
+            // Patient is populated
+            patientName = `${appointment.patient.firstName} ${appointment.patient.lastName}`;
+            patientEmail = appointment.patient.email || 'No email';
+            patientPhone = appointment.patient.phone || 'No phone';
+            patientGender = appointment.patient.gender || 'Not specified';
+            patientId = appointment.patient._id || appointment.patient.id || 'N/A';
+          } else {
+            // Patient is just an ID
+            patientId = appointment.patient;
+            patientName = `Patient ${patientId.slice(-4)}`;
+          }
+        }
+        
+        return {
+          id: appointment._id,
+          patient: patientName,
+          patientEmail: patientEmail,
+          patientPhone: patientPhone,
+          time: appointment.time || 'No time specified',
+          timeSlot: appointment.timeSlot || appointment.time || 'No time slot',
+          type: appointment.type === 'consultation' ? 'Video Call' : 
+                appointment.type === 'follow-up' ? 'Follow-up' :
+                appointment.type === 'checkup' ? 'In-person' :
+                appointment.type === 'emergency' ? 'Emergency' : 'Consultation',
+          status: appointment.status || 'scheduled',
+          symptoms: appointment.reason || appointment.notes || 'No reason provided',
+          patientId: patientId,
+          gender: patientGender,
+          priority: appointment.priority || (appointment.type === 'emergency' ? 'high' : 'normal'),
+          appointmentDate: appointment.date,
+          doctor: appointment.doctor,
+          duration: appointment.duration || 30,
+          scheduleId: appointment.scheduleId,
+          slotId: appointment.slotId,
+          createdAt: appointment.createdAt,
+          updatedAt: appointment.updatedAt,
+          rescheduleHistory: appointment.rescheduleHistory || []
+        };
+      }) || [];
+
+      console.log('🔄 Transformed appointments:', transformedAppointments);
+      setAppointments(transformedAppointments);
+
+      // Calculate stats
+      const stats = {
+        total: transformedAppointments.length,
+        completed: transformedAppointments.filter(apt => apt.status === 'completed').length,
+        pending: transformedAppointments.filter(apt => apt.status === 'scheduled' || apt.status === 'confirmed').length,
+        noShow: transformedAppointments.filter(apt => apt.status === 'no-show').length
+      };
+      console.log('📊 Calculated stats:', stats);
+      setAppointmentStats(stats);
+
+    } catch (error) {
+      console.error('❌ Error fetching appointments:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      
+      // Show user-friendly error message but don't fall back to dummy data
+      setAppointments([]);
+      setAppointmentStats({
+        total: 0,
+        completed: 0,
+        pending: 0,
+        noShow: 0
+      });
+      
+      // You can add a toast notification here if you have one set up
+      // toast.error('Failed to load appointments. Please try again.');
+    } finally {
+      setLoadingAppointments(false);
+    }
+  };
+
+  // Function to fetch appointments for an entire month (for calendar indicators)
+  const fetchMonthlyAppointments = async (year, month) => {
+    try {
+      const user = getCurrentUser();
+      if (!user || !user.id) {
+        return;
+      }
+
+      // Get first and last day of the month
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      
+      const startDate = firstDay.toISOString().split('T')[0];
+      const endDate = lastDay.toISOString().split('T')[0];
+      
+      console.log(`📅 Fetching monthly appointments from ${startDate} to ${endDate}`);
+
+      // Fetch appointments for each day of the month
+      const appointments = {};
+      const promises = [];
+
+      for (let day = 1; day <= lastDay.getDate(); day++) {
+        const currentDate = new Date(year, month, day);
+        const dateString = currentDate.toISOString().split('T')[0];
+        
+        const promise = fetch(`http://localhost:3000/api/appointments/doctor-appointments?date=${dateString}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        })
+        .then(response => response.ok ? response.json() : null)
+        .then(result => {
+          if (result && result.data && result.data.length > 0) {
+            appointments[dateString] = result.data.length;
+          }
+        })
+        .catch(error => {
+          console.log(`No appointments for ${dateString}`);
+        });
+
+        promises.push(promise);
+      }
+
+      await Promise.all(promises);
+      setAppointmentsByDate(appointments);
+      console.log('📊 Monthly appointments loaded:', appointments);
+
+    } catch (error) {
+      console.error('❌ Error fetching monthly appointments:', error);
+    }
+  };
+
+  // Helper function to get time input constraints for a date
+  const getTimeConstraints = (dateStr) => {
+    const existingSchedule = existingSchedules[dateStr];
+    if (!existingSchedule) {
+      return { min: '00:00', max: '23:59', disabled: false };
+    }
+
+    return {
+      existingStart: existingSchedule.startTime,
+      existingEnd: existingSchedule.endTime,
+      disabled: false,
+      ranges: getAvailableTimeRanges(dateStr)
+    };
+  };
+
+  // Helper function to validate if selected times are valid for a date
+  const validateTimesForDate = (dateStr, startTime, endTime) => {
+    if (!startTime || !endTime) return { isValid: true };
+
+    const existingSchedule = existingSchedules[dateStr];
+    if (!existingSchedule) return { isValid: true };
+
+    const conflict = doesTimeConflict(dateStr, startTime, endTime);
+    if (conflict) {
+      const availableRanges = getAvailableTimeRanges(dateStr);
+      return {
+        isValid: false,
+        message: `Time conflicts with existing schedule (${existingSchedule.startTime}-${existingSchedule.endTime})`,
+        availableRanges,
+        existingSchedule
+      };
+    }
+
+    return { isValid: true };
+  };
+
+  // Enhanced Time Input Component with conflict checking
+  const TimeInputWithConflictCheck = ({ dateStr, isStart, value, onChange, className, disabled = false }) => {
+    const constraints = getTimeConstraints(dateStr);
+    const validation = validateTimesForDate(
+      dateStr, 
+      isStart ? value : (customSchedules[dateStr]?.startTime || defaultTimes.startTime),
+      isStart ? (customSchedules[dateStr]?.endTime || defaultTimes.endTime) : value
+    );
+
+    const handleTimeChange = (e) => {
+      const newTime = e.target.value;
+      onChange(e);
+      
+      // Show warning if there's a conflict
+      if (!validation.isValid) {
+        // The validation will be shown in the UI
+      }
+    };
+
+    return (
+      <div className="relative">
+        <input
+          type="time"
+          value={value}
+          onChange={handleTimeChange}
+          disabled={disabled}
+          className={`${className} ${!validation.isValid ? 'border-red-500 bg-red-50' : ''}`}
+        />
+        {!validation.isValid && (
+          <div className="absolute top-full left-0 right-0 z-10 mt-1 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+            <p className="font-medium">{validation.message}</p>
+            <p className="mt-1">Available times:</p>
+            <ul className="mt-1 space-y-1">
+              {validation.availableRanges.map((range, idx) => (
+                <li key={idx} className="text-red-600">
+                  • {range.label}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Simple Calendar Component
+  const MiniCalendar = () => {
+    const today = new Date();
+    const currentMonth = selectedDate.getMonth();
+    const currentYear = selectedDate.getFullYear();
+    
+    // Get first day of month and number of days
+    const firstDayOfMonth = new Date(currentYear, currentMonth, 1);
+    const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
+    const firstDayWeekday = firstDayOfMonth.getDay();
+    const daysInMonth = lastDayOfMonth.getDate();
+    
+    // Generate calendar days
+    const calendarDays = [];
+    
+    // Add empty cells for days before month starts
+    for (let i = 0; i < firstDayWeekday; i++) {
+      calendarDays.push(null);
+    }
+    
+    // Add days of the month
+    for (let day = 1; day <= daysInMonth; day++) {
+      calendarDays.push(day);
+    }
+    
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    
+    const handleDateClick = (day) => {
+      if (day) {
+        const newDate = new Date(currentYear, currentMonth, day);
+        const today = new Date();
+        
+        // Disable past dates
+        if (newDate < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
+          return;
+        }
+        
+        setSelectedDate(newDate);
+      }
+    };
+    
+    const goToPrevMonth = () => {
+      const newDate = new Date(currentYear, currentMonth - 1, 1);
+      setSelectedDate(newDate);
+      // Fetch appointments for the new month
+      fetchMonthlyAppointments(newDate.getFullYear(), newDate.getMonth());
+    };
+    
+    const goToNextMonth = () => {
+      const newDate = new Date(currentYear, currentMonth + 1, 1);
+      setSelectedDate(newDate);
+      // Fetch appointments for the new month
+      fetchMonthlyAppointments(newDate.getFullYear(), newDate.getMonth());
+    };
+    
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <div className="flex items-center justify-between mb-4">
+          <button 
+            onClick={goToPrevMonth}
+            className="p-1 hover:bg-gray-100 rounded transition-colors"
+          >
+            <ChevronDownIcon className="h-4 w-4 rotate-90" />
+          </button>
+          <h4 className="font-semibold text-gray-900">
+            {monthNames[currentMonth]} {currentYear}
+          </h4>
+          <button 
+            onClick={goToNextMonth}
+            className="p-1 hover:bg-gray-100 rounded transition-colors"
+          >
+            <ChevronDownIcon className="h-4 w-4 -rotate-90" />
+          </button>
+        </div>
+        
+        {/* Weekday headers */}
+        <div className="grid grid-cols-7 gap-1 mb-2">
+          {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
+            <div key={day} className="text-xs font-medium text-gray-500 text-center py-1">
+              {day}
+            </div>
+          ))}
+        </div>
+        
+        {/* Calendar grid */}
+        <div className="grid grid-cols-7 gap-1">
+          {calendarDays.map((day, index) => {
+            const isToday = day && 
+              today.getDate() === day && 
+              today.getMonth() === currentMonth && 
+              today.getFullYear() === currentYear;
+            
+            const isSelected = day && 
+              selectedDate.getDate() === day && 
+              selectedDate.getMonth() === currentMonth && 
+              selectedDate.getFullYear() === currentYear;
+            
+            // Check if this is a past date
+            const currentDate = day ? new Date(currentYear, currentMonth, day) : null;
+            const isPastDate = currentDate && currentDate < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            
+            // Check if this date has appointments
+            const dateString = currentDate ? currentDate.toISOString().split('T')[0] : null;
+            const hasAppointments = dateString && appointmentsByDate[dateString] > 0;
+            const appointmentCount = dateString ? appointmentsByDate[dateString] || 0 : 0;
+            
+            return (
+              <div key={index} className="relative">
+                <button
+                  onClick={() => handleDateClick(day)}
+                  disabled={!day || isPastDate}
+                  className={`
+                    h-8 w-8 text-xs rounded-lg transition-colors relative
+                    ${!day ? 'cursor-default' : ''}
+                    ${isPastDate ? 'text-gray-300 cursor-not-allowed bg-gray-50' : 'hover:bg-gray-100'}
+                    ${isToday && !isPastDate ? 'bg-blue-100 text-blue-700 font-semibold' : ''}
+                    ${isSelected ? 'bg-blue-600 text-white font-semibold' : ''}
+                    ${day && !isToday && !isSelected && !isPastDate ? 'text-gray-700' : ''}
+                    ${hasAppointments && !isSelected ? 'ring-2 ring-green-400' : ''}
+                  `}
+                >
+                  {day}
+                  {hasAppointments && (
+                    <div className="absolute -top-1 -right-1 h-3 w-3 bg-green-500 rounded-full flex items-center justify-center">
+                      <span className="text-white text-xs font-bold" style={{fontSize: '8px'}}>
+                        {appointmentCount}
+                      </span>
+                    </div>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        
+        {/* Legend */}
+        <div className="mt-3 text-xs text-gray-600 space-y-1">
+          <div className="flex items-center space-x-2">
+            <div className="h-2 w-2 bg-blue-600 rounded-full"></div>
+            <span>Selected</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="h-2 w-2 bg-green-500 rounded-full"></div>
+            <span>Has appointments</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="h-2 w-2 bg-gray-300 rounded-full"></div>
+            <span>Past date</span>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // Mock notifications data
@@ -511,7 +1127,9 @@ const DoctorDashboard = () => {
     const errors = [];
 
     try {
-      // 1. Save to schedule collection with timestamp
+      // 1. Save to schedule collection with complete slot data
+      console.log('Saving schedule data with slots:', scheduleData);
+      
       const scheduleResponse = await fetch('http://localhost:3001/api/schedules/today', {
         method: 'POST',
         headers: {
@@ -521,6 +1139,9 @@ const DoctorDashboard = () => {
         body: JSON.stringify({
           startTime: scheduleData.startTime,
           endTime: scheduleData.endTime,
+          totalSlots: scheduleData.totalSlots,
+          slotDuration: scheduleData.slotDuration,
+          availableSlots: scheduleData.availableSlots,
           lastUpdated: new Date().toISOString(),
           submittedAt: new Date().toISOString()
         })
@@ -529,6 +1150,9 @@ const DoctorDashboard = () => {
       if (!scheduleResponse.ok) {
         const errorData = await scheduleResponse.json();
         errors.push(`Schedule save failed: ${errorData.message || 'Unknown error'}`);
+      } else {
+        const scheduleResult = await scheduleResponse.json();
+        console.log('Schedule saved successfully:', scheduleResult);
       }
 
       // 2. Save to availability collection (for compatibility) with timestamp
@@ -1099,6 +1723,20 @@ const DoctorDashboard = () => {
       if (endMinutes - startMinutes < 30) {
         errors.push(`Schedule must be at least 30 minutes long for ${date}`);
       }
+
+      // Validate slot duration (minimum 10 minutes per slot)
+      const totalSlots = schedules.find(s => s.date === date)?.totalSlots || 6;
+      const slotDuration = Math.floor((endMinutes - startMinutes) / totalSlots);
+      if (slotDuration < 10) {
+        const maxSlots = Math.floor((endMinutes - startMinutes) / 10);
+        errors.push(`Slot duration for ${date} is ${slotDuration} minutes. Minimum required is 10 minutes. Maximum slots allowed: ${maxSlots}`);
+      }
+
+      // Validate time conflicts with existing schedules
+      const timeValidation = validateTimesForDate(date, startTime, endTime);
+      if (!timeValidation.isValid) {
+        errors.push(`Time conflict for ${date}: ${timeValidation.message}`);
+      }
     });
     
     return errors;
@@ -1120,19 +1758,52 @@ const DoctorDashboard = () => {
       // Since selectedDates are already stored as formatted strings, use them directly
       const dateStr = typeof date === 'string' ? date : formatDateString(date);
       
+      let schedule;
       if (scheduleMode === 'custom' && customSchedules[dateStr]) {
-        return {
+        schedule = {
           date: dateStr,
           startTime: customSchedules[dateStr].startTime,
           endTime: customSchedules[dateStr].endTime
         };
       } else {
-        return {
+        schedule = {
           date: dateStr,
           startTime: defaultTimes.startTime,
           endTime: defaultTimes.endTime
         };
       }
+
+      // Add slot information
+      let totalSlots, slotDuration, availableSlots;
+      
+      if (customSlotSettings[dateStr] && customSlotSettings[dateStr].customSlots) {
+        // Use custom slot settings for this date
+        totalSlots = customSlotSettings[dateStr].totalSlots;
+      } else {
+        // Use default slot settings
+        totalSlots = defaultSlots.totalSlots;
+      }
+
+      // Calculate slot duration and generate slots
+      slotDuration = calculateSlotDuration(schedule.startTime, schedule.endTime, totalSlots);
+      availableSlots = generateTimeSlots(schedule.startTime, schedule.endTime, totalSlots);
+
+      return {
+        ...schedule,
+        totalSlots,
+        slotDuration,
+        availableSlots: availableSlots.map(slot => ({
+          slotNumber: slot.slotNumber,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          duration: slot.duration,
+          isBooked: slot.isBooked || false,
+          patientId: slot.patientId || null,
+          bookingTime: slot.bookingTime || null,
+          createdAt: slot.createdAt || new Date().toISOString(),
+          status: slot.status || 'available'
+        }))
+      };
     });
 
     // Validate data
@@ -1175,6 +1846,7 @@ const DoctorDashboard = () => {
     }
 
     // Save schedules
+    console.log('Sending schedules to backend:', schedules);
     const saveResult = await saveUpcomingSchedules(schedules);
 
     if (saveResult.success) {
@@ -1261,7 +1933,7 @@ const DoctorDashboard = () => {
   };
 
   const handleSubmitScheduleSetup = async () => {
-    const { startTime, endTime } = scheduleSetup;
+    const { startTime, endTime, totalSlots } = scheduleSetup;
     
     // Validate schedule
     const validationError = validateScheduleTime(startTime, endTime);
@@ -1283,9 +1955,32 @@ const DoctorDashboard = () => {
         }
       };
 
+      // Calculate slot information
+      const slotDuration = calculateSlotDuration(startTime, endTime, totalSlots);
+      const availableSlots = generateTimeSlots(startTime, endTime, totalSlots);
+
+      // Create schedule data with slot information
+      const scheduleData = {
+        startTime,
+        endTime,
+        totalSlots,
+        slotDuration,
+        availableSlots: availableSlots.map(slot => ({
+          slotNumber: slot.slotNumber,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          duration: slot.duration,
+          isBooked: slot.isBooked || false,
+          patientId: slot.patientId || null,
+          bookingTime: slot.bookingTime || null,
+          createdAt: slot.createdAt || new Date().toISOString(),
+          status: slot.status || 'available'
+        }))
+      };
+
       // Use the helper function to save to both collections
       const saveResult = await saveBothToDatabase(
-        { startTime, endTime },
+        scheduleData,
         updatedAvailability
       );
 
@@ -1320,7 +2015,8 @@ const DoctorDashboard = () => {
         // Reset form
         setScheduleSetup({
           startTime: '',
-          endTime: ''
+          endTime: '',
+          totalSlots: 6
         });
         setScheduleSetupError('');
 
@@ -1907,6 +2603,38 @@ const DoctorDashboard = () => {
     fetchUpcomingSchedules();
   }, []);
 
+  // Fetch appointments when selected date changes
+  useEffect(() => {
+    if (selectedDate) {
+      fetchAppointments(selectedDate);
+    }
+  }, [selectedDate]);
+
+  // Initialize with today's appointments on component mount
+  useEffect(() => {
+    const today = new Date();
+    setSelectedDate(today); // Ensure today is selected by default
+    fetchAppointments(today);
+    fetchMonthlyAppointments(today.getFullYear(), today.getMonth());
+  }, []);
+
+  // Fetch appointments when selectedDate changes
+  useEffect(() => {
+    if (selectedDate) {
+      console.log('📅 Selected date changed, fetching appointments for:', selectedDate.toLocaleDateString());
+      fetchAppointments(selectedDate);
+    }
+  }, [selectedDate]);
+
+  // Fetch monthly appointments when selectedDate month changes
+  useEffect(() => {
+    if (selectedDate) {
+      const monthKey = `${selectedDate.getFullYear()}-${selectedDate.getMonth()}`;
+      console.log('📅 Month changed, fetching appointments for:', monthKey);
+      fetchMonthlyAppointments(selectedDate.getFullYear(), selectedDate.getMonth());
+    }
+  }, [selectedDate.getMonth(), selectedDate.getFullYear()]);
+
   const onLogout = () => {
     Swal.fire({
       title: 'Are you sure?',
@@ -1946,42 +2674,6 @@ const DoctorDashboard = () => {
   ];
 
   // Mock data for doctor dashboard
-  const todaysAppointments = [
-    {
-      id: 1,
-      patient: 'Sarah Johnson',
-      time: '10:30 AM',
-      type: 'Video Call',
-      status: 'confirmed',
-      symptoms: 'Headache, fever',
-      patientId: 'P12345',
-      gender: 'Female',
-      priority: 'normal'
-    },
-    {
-      id: 2,
-      patient: 'Michael Chen',
-      time: '2:15 PM',
-      type: 'In-person',
-      status: 'pending',
-      symptoms: 'Chest pain, shortness of breath',
-      patientId: 'P12346',
-      gender: 'Male',
-      priority: 'high'
-    },
-    {
-      id: 3,
-      patient: 'Emily Davis',
-      time: '4:00 PM',
-      type: 'Video Call',
-      status: 'confirmed',
-      symptoms: 'Skin rash',
-      patientId: 'P12347',
-      gender: 'Female',
-      priority: 'normal'
-    }
-  ];
-
   const patientList = [
     {
       id: 'P12345',
@@ -2225,10 +2917,10 @@ const DoctorDashboard = () => {
                   <div className="flex items-center justify-center mb-3">
                     <CalendarDaysIcon className="w-8 h-8 sm:w-10 sm:h-10 group-hover:scale-110 transition-transform duration-200" />
                   </div>
-                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">{todaysAppointments.length}</div>
+                  <div className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2">{appointmentStats.total}</div>
                   <div className="text-blue-100 text-xs sm:text-sm">Today's Appointments</div>
                   <div className="mt-2 sm:mt-3 text-xs bg-white/20 rounded-full px-2 sm:px-3 py-1 inline-block">
-                    Next: {todaysAppointments[0]?.time}
+                    Next: {appointments.length > 0 ? appointments[0]?.timeSlot || appointments[0]?.time || 'No appointments' : 'No appointments'}
                   </div>
                 </div>
               </Card>
@@ -2361,78 +3053,163 @@ const DoctorDashboard = () => {
 
       case 'appointments':
         return (
-          <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
-                <CalendarDaysIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-blue-600" />
-                <span className="hidden sm:inline">Appointment Management</span>
-                <span className="sm:hidden">Appointments</span>
-              </h2>
-              <Button className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-lg hover:shadow-xl transition-all duration-300 text-sm">
-                <PlusIcon className="mr-2 h-5 w-5" />
-                <span className="hidden sm:inline">New Appointment</span>
-                <span className="sm:hidden">New</span>
-              </Button>
+          <div className="p-6 bg-gray-50 min-h-screen">
+            {/* Header Section */}
+            <div className="mb-8">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-3xl font-bold text-gray-900 mb-2">Appointments</h2>
+                  <p className="text-gray-600">
+                    {selectedDate.toDateString() === new Date().toDateString() 
+                      ? "Today's appointments" 
+                      : `Appointments for ${selectedDate.toLocaleDateString()}`}
+                  </p>
+                </div>
+                <div className="mt-4 md:mt-0 flex space-x-3">
+                  <button 
+                    onClick={() => setSelectedDate(new Date())}
+                    className={`px-4 py-2 rounded-lg transition-colors flex items-center ${
+                      selectedDate.toDateString() === new Date().toDateString()
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <ClockIcon className="h-5 w-5 mr-2" />
+                    Today
+                  </button>
+                  <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center">
+                    <PlusIcon className="h-5 w-5 mr-2" />
+                    Schedule New
+                  </button>
+                </div>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <Card className="lg:col-span-2 bg-white/80 backdrop-blur-sm border-0 shadow-xl">
-                <div className="p-6">
-                  <h3 className="text-lg font-bold text-gray-900 mb-6">Today's Appointments</h3>
-                  <div className="space-y-4">
-                    {todaysAppointments.map((appointment) => (
-                      <div key={appointment.id} className="relative overflow-hidden rounded-xl bg-gradient-to-r from-white to-gray-50 p-6 border border-gray-100 hover:shadow-lg transition-all duration-300">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-4">
-                            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-2xl">
-                              {appointment.avatar}
-                            </div>
-                            <div>
-                              <div className="font-bold text-lg text-gray-900">{appointment.patient}</div>
-                              <div className="text-sm text-gray-600 font-medium">{appointment.symptoms}</div>
-                              <div className="text-xs text-gray-500">Patient ID: {appointment.patientId}</div>
-                            </div>
+
+            {/* Stats Overview */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">Total Today</p>
+                    <p className="text-3xl font-bold text-blue-600">{appointments.length}</p>
+                  </div>
+                  <div className="h-12 w-12 bg-blue-50 rounded-lg flex items-center justify-center">
+                    <CalendarIcon className="h-6 w-6 text-blue-600" />
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">Completed</p>
+                    <p className="text-3xl font-bold text-green-600">
+                      {appointments.filter(apt => apt.status === 'completed').length}
+                    </p>
+                  </div>
+                  <div className="h-12 w-12 bg-green-50 rounded-lg flex items-center justify-center">
+                    <CheckCircleIcon className="h-6 w-6 text-green-600" />
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">Upcoming</p>
+                    <p className="text-3xl font-bold text-yellow-600">
+                      {appointments.filter(apt => apt.status === 'confirmed' || apt.status === 'scheduled').length}
+                    </p>
+                  </div>
+                  <div className="h-12 w-12 bg-yellow-50 rounded-lg flex items-center justify-center">
+                    <ClockIcon className="h-6 w-6 text-yellow-600" />
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">Cancelled</p>
+                    <p className="text-3xl font-bold text-red-600">
+                      {appointments.filter(apt => apt.status === 'cancelled').length}
+                    </p>
+                  </div>
+                  <div className="h-12 w-12 bg-red-50 rounded-lg flex items-center justify-center">
+                    <XCircleIcon className="h-6 w-6 text-red-600" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Content */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+              {/* Calendar Sidebar */}
+              <div className="lg:col-span-1">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Date</h3>
+                  <AppointmentCalendar 
+                    selectedDate={selectedDate}
+                    onDateSelect={setSelectedDate}
+                    appointments={allAppointments}
+                  />
+                </div>
+              </div>
+
+              {/* Appointments List */}
+              <div className="lg:col-span-3">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+                  <div className="p-6 border-b border-gray-200">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-xl font-semibold text-gray-900">
+                          {selectedDate.toDateString() === new Date().toDateString() 
+                            ? "Today's Appointments" 
+                            : `Appointments - ${selectedDate.toLocaleDateString()}`}
+                        </h3>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {loadingAppointments ? 'Loading...' : `${appointments.length} appointment(s) found`}
+                        </p>
+                      </div>
+                      <div className="mt-3 sm:mt-0 flex space-x-3">
+                        <button 
+                          onClick={() => fetchAppointments(selectedDate)}
+                          className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors"
+                        >
+                          Refresh
+                        </button>
+                        <select className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                          <option>All Status</option>
+                          <option>Confirmed</option>
+                          <option>Completed</option>
+                          <option>Cancelled</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="divide-y divide-gray-200">
+                    {loadingAppointments ? (
+                      <div className="p-12 text-center">
+                        <div className="flex flex-col items-center">
+                          <div className="relative">
+                            <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                            <CalendarIcon className="w-6 h-6 text-blue-600 absolute top-3 left-3" />
                           </div>
-                          <div className="text-right space-y-2">
-                            <div className="text-lg font-bold text-gray-800">{appointment.time}</div>
-                            <span className={`inline-flex px-3 py-1 text-xs rounded-full font-medium ${
-                              appointment.type === 'Video Call' 
-                                ? 'bg-blue-100 text-blue-700' 
-                                : 'bg-green-100 text-green-700'
-                            }`}>
-                              {appointment.type}
-                            </span>
-                            <div className="flex space-x-2 mt-2">
-                              <Button size="sm" className="bg-green-500 hover:bg-green-600">Complete</Button>
-                              <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50">Cancel</Button>
-                            </div>
-                          </div>
+                          <p className="text-gray-600 mt-4 font-medium">Loading appointments...</p>
                         </div>
                       </div>
-                    ))}
+                    ) : appointments.length === 0 ? (
+                      <div className="p-8 text-center text-gray-500">
+                        <CalendarIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+                        <p className="text-lg font-medium">No appointments found</p>
+                        <p className="text-sm">No appointments scheduled for {selectedDate.toLocaleDateString()}</p>
+                      </div>
+                    ) : (
+                      appointments.map((appointment) => (
+                        <AppointmentCard key={appointment._id} appointment={appointment} />
+                      ))
+                    )}
                   </div>
                 </div>
-              </Card>
-
-              <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl">
-                <div className="p-6">
-                  <h3 className="text-lg font-bold text-gray-900 mb-4">Appointment Status</h3>
-                  <div className="space-y-4">
-                    <div className="text-center p-4 bg-green-50 rounded-xl">
-                      <div className="text-2xl font-bold text-green-600">8</div>
-                      <div className="text-sm text-green-700">Scheduled</div>
-                    </div>
-                    <div className="text-center p-4 bg-blue-50 rounded-xl">
-                      <div className="text-2xl font-bold text-blue-600">3</div>
-                      <div className="text-sm text-blue-700">Completed</div>
-                    </div>
-                    <div className="text-center p-4 bg-red-50 rounded-xl">
-                      <div className="text-2xl font-bold text-red-600">1</div>
-                      <div className="text-sm text-red-700">No-show</div>
-                    </div>
-                  </div>
-                </div>
-              </Card>
+              </div>
             </div>
           </div>
         );
@@ -2674,6 +3451,94 @@ const DoctorDashboard = () => {
                             </div>
                           </div>
                           
+                          {/* Slot Configuration for Today's Schedule */}
+                          {doctorAvailability.dailySchedule.startTime && doctorAvailability.dailySchedule.endTime && (
+                            <div className="space-y-3">
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-sm text-gray-600 mb-1 block">Number of Patient Slots</label>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max={getMaxSlotsForTimeRange(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime)}
+                                    value={todaySlots.totalSlots}
+                                    onChange={(e) => {
+                                      const newSlots = parseInt(e.target.value) || 6;
+                                      const maxSlots = getMaxSlotsForTimeRange(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime);
+                                      setTodaySlots(prev => ({ 
+                                        ...prev, 
+                                        totalSlots: Math.min(newSlots, maxSlots) 
+                                      }));
+                                    }}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                                    placeholder="6"
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    Total slots (max: {getMaxSlotsForTimeRange(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime)})
+                                  </p>
+                                </div>
+                                <div>
+                                  <label className="text-sm text-gray-600 mb-1 block">Slot Duration</label>
+                                  <input
+                                    type="text"
+                                    readOnly
+                                    value={`${calculateSlotDuration(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime, todaySlots.totalSlots)} min`}
+                                    className={`w-full px-3 py-2 bg-gray-100 border rounded-lg ${
+                                      !validateSlotDuration(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime, todaySlots.totalSlots)?.isValid
+                                        ? 'border-red-300 text-red-600 bg-red-50' 
+                                        : 'border-gray-300 text-gray-600'
+                                    }`}
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">Time per slot (min: 10 min)</p>
+                                </div>
+                              </div>
+                              
+                              {/* Today's Schedule Slot Validation Warning */}
+                              {(() => {
+                                const validation = validateSlotDuration(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime, todaySlots.totalSlots);
+                                if (!validation?.isValid) {
+                                  return (
+                                    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                                      <div className="flex items-start">
+                                        <ExclamationTriangleIcon className="w-4 h-4 text-red-500 mr-2 mt-0.5 flex-shrink-0" />
+                                        <div>
+                                          <p className="text-sm font-medium text-red-800">Invalid Slot Duration</p>
+                                          <p className="text-xs text-red-700 mt-1">{validation?.message}</p>
+                                          <button
+                                            type="button"
+                                            onClick={() => setTodaySlots(prev => ({ ...prev, totalSlots: validation?.maxSlots || 6 }))}
+                                            className="text-xs text-red-600 hover:text-red-800 font-medium mt-2 underline"
+                                          >
+                                            Auto-fix: Set to {validation?.maxSlots} slots
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
+                              
+                              {/* Today's Schedule Slot Preview */}
+                              <div className="mt-3 p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+                                <h4 className="text-sm font-medium text-emerald-800 mb-2">Today's Time Slot Preview:</h4>
+                                <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                                  {generateTimeSlots(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime, todaySlots.totalSlots).slice(0, 6).map((slot, index) => (
+                                    <div key={index} className="text-xs p-2 bg-white rounded border border-emerald-200 flex justify-between">
+                                      <span className="font-medium">Slot {slot.slotNumber}</span>
+                                      <span>{slot.startTime}-{slot.endTime}</span>
+                                    </div>
+                                  ))}
+                                  {generateTimeSlots(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime, todaySlots.totalSlots).length > 6 && (
+                                    <div className="col-span-2 text-xs text-emerald-600 text-center py-1">
+                                      ... and {generateTimeSlots(doctorAvailability.dailySchedule.startTime, doctorAvailability.dailySchedule.endTime, todaySlots.totalSlots).length - 6} more slots
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          
                           <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                             <div className="flex items-center space-x-2 mb-2">
                               <ClockIcon className="w-4 h-4 text-blue-600" />
@@ -2825,11 +3690,33 @@ const DoctorDashboard = () => {
                     setDoctorAvailability(updatedAvailability);
                     setIsOnline(true);
                     
-                    // Save to both database collections
+                    // Calculate slot information for today's schedule
+                    const slotDuration = calculateSlotDuration(
+                      updatedAvailability.dailySchedule.startTime, 
+                      updatedAvailability.dailySchedule.endTime, 
+                      todaySlots.totalSlots
+                    );
+                    const availableSlots = generateTimeSlots(
+                      updatedAvailability.dailySchedule.startTime, 
+                      updatedAvailability.dailySchedule.endTime, 
+                      todaySlots.totalSlots
+                    );
+
+                    // Save to both database collections with slot data
                     const saveResult = await saveBothToDatabase(
                       {
                         startTime: updatedAvailability.dailySchedule.startTime,
-                        endTime: updatedAvailability.dailySchedule.endTime
+                        endTime: updatedAvailability.dailySchedule.endTime,
+                        totalSlots: todaySlots.totalSlots,
+                        slotDuration: slotDuration,
+                        availableSlots: availableSlots.map(slot => ({
+                          slotNumber: slot.slotNumber,
+                          startTime: slot.startTime,
+                          endTime: slot.endTime,
+                          isBooked: false,
+                          patientId: null,
+                          bookingTime: null
+                        }))
                       },
                       updatedAvailability
                     );
@@ -3326,6 +4213,153 @@ const DoctorDashboard = () => {
                         )}
                       </div>
                     )}
+
+                    {/* Slot Configuration Section */}
+                    <div className="space-y-4 mb-6">
+                      <label className="text-sm font-medium text-gray-700 flex items-center">
+                        <CpuChipIcon className="w-4 h-4 mr-2 text-indigo-500" />
+                        Slot Configuration
+                      </label>
+                      
+                      {/* Default Slot Settings */}
+                      <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <div className="mb-4">
+                          <label className="block text-xs font-medium text-gray-600 mb-2">
+                            Default Slots for All Dates
+                          </label>
+                          <div className="flex items-center space-x-4">
+                            <div className="flex-1">
+                              <label className="block text-xs font-medium text-gray-500 mb-1">
+                                Number of Slots
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                max={getMaxSlotsForTimeRange(defaultTimes.startTime, defaultTimes.endTime)}
+                                value={defaultSlots.totalSlots}
+                                onChange={(e) => {
+                                  const newSlots = parseInt(e.target.value) || 6;
+                                  const maxSlots = getMaxSlotsForTimeRange(defaultTimes.startTime, defaultTimes.endTime);
+                                  setDefaultSlots(prev => ({
+                                    ...prev,
+                                    totalSlots: Math.min(newSlots, maxSlots)
+                                  }));
+                                }}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                placeholder="6"
+                              />
+                              {defaultTimes.startTime && defaultTimes.endTime && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Max: {getMaxSlotsForTimeRange(defaultTimes.startTime, defaultTimes.endTime)} slots
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <label className="block text-xs font-medium text-gray-500 mb-1">
+                                Duration per Slot
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={defaultTimes.startTime && defaultTimes.endTime ? 
+                                  `${calculateSlotDuration(defaultTimes.startTime, defaultTimes.endTime, defaultSlots.totalSlots)} min` : 
+                                  '0 min'}
+                                className={`w-full px-3 py-2 bg-gray-100 border rounded-lg text-sm ${
+                                  defaultTimes.startTime && defaultTimes.endTime && 
+                                  !validateSlotDuration(defaultTimes.startTime, defaultTimes.endTime, defaultSlots.totalSlots)?.isValid
+                                    ? 'border-red-300 text-red-600 bg-red-50' 
+                                    : 'border-gray-300 text-gray-600'
+                                }`}
+                              />
+                            </div>
+                          </div>
+                          
+                          {/* Validation Warning */}
+                          {defaultTimes.startTime && defaultTimes.endTime && (
+                            (() => {
+                              const validation = validateSlotDuration(defaultTimes.startTime, defaultTimes.endTime, defaultSlots.totalSlots);
+                              if (!validation?.isValid) {
+                                return (
+                                  <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                                    <div className="flex items-start">
+                                      <ExclamationTriangleIcon className="w-4 h-4 text-red-500 mr-2 mt-0.5 flex-shrink-0" />
+                                      <div>
+                                        <p className="text-sm font-medium text-red-800">Slot Duration Too Short</p>
+                                        <p className="text-xs text-red-700 mt-1">{validation?.message}</p>
+                                        <button
+                                          type="button"
+                                          onClick={() => setDefaultSlots(prev => ({ ...prev, totalSlots: validation?.maxSlots || 6 }))}
+                                          className="text-xs text-red-600 hover:text-red-800 font-medium mt-2 underline"
+                                        >
+                                          Set to maximum ({validation?.maxSlots} slots)
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()
+                          )}
+                        </div>
+
+                        {/* Slot Preview */}
+                        {defaultTimes.startTime && defaultTimes.endTime && (
+                          <div className="mt-4">
+                            <button
+                              type="button"
+                              onClick={() => setShowSlotPreview(!showSlotPreview)}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center"
+                            >
+                              <SparklesIcon className="w-3 h-3 mr-1" />
+                              {showSlotPreview ? 'Hide' : 'Preview'} Time Slots
+                            </button>
+                            
+                            {showSlotPreview && (
+                              <div className="mt-3 p-3 bg-white rounded border border-blue-200 max-h-40 overflow-y-auto">
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  {generateTimeSlots(defaultTimes.startTime, defaultTimes.endTime, defaultSlots.totalSlots).map((slot, index) => (
+                                    <div key={index} className="flex justify-between p-2 bg-gray-50 rounded border">
+                                      <span className="font-medium">Slot {slot.slotNumber}</span>
+                                      <span>{slot.startTime} - {slot.endTime}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Custom Slot Settings Toggle */}
+                      <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                        <div>
+                          <label className="text-sm font-medium text-gray-700">
+                            Custom Slots for Individual Dates
+                          </label>
+                          <p className="text-xs text-gray-500">
+                            Override default slot count for specific dates
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setDefaultSlots(prev => ({
+                            ...prev,
+                            customSlots: !prev.customSlots
+                          }))}
+                          className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                            defaultSlots.customSlots ? 'bg-blue-600' : 'bg-gray-200'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                              defaultSlots.customSlots ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                    
                     {/* Custom Times for Each Date - Inline */}
                     {scheduleMode === 'custom' && selectedDates.length > 0 && (
                       <div className="space-y-4 mb-6">
@@ -3352,8 +4386,9 @@ const DoctorDashboard = () => {
                                 <div className="grid grid-cols-2 gap-3">
                                   <div>
                                     <label className="block text-xs font-medium text-gray-500 mb-1">Start Time</label>
-                                    <input
-                                      type="time"
+                                    <TimeInputWithConflictCheck
+                                      dateStr={dateStr}
+                                      isStart={true}
                                       value={customSchedule.startTime}
                                       onChange={(e) => handleCustomScheduleChange(dateStr, 'startTime', e.target.value)}
                                       className={getTimeInputStyling(customSchedule.startTime, customSchedule.endTime, false)}
@@ -3361,18 +4396,170 @@ const DoctorDashboard = () => {
                                   </div>
                                   <div>
                                     <label className="block text-xs font-medium text-gray-500 mb-1">End Time</label>
-                                    <input
-                                      type="time"
+                                    <TimeInputWithConflictCheck
+                                      dateStr={dateStr}
+                                      isStart={false}
                                       value={customSchedule.endTime}
                                       onChange={(e) => handleCustomScheduleChange(dateStr, 'endTime', e.target.value)}
                                       className={getTimeInputStyling(customSchedule.startTime, customSchedule.endTime, true)}
                                     />
                                   </div>
                                 </div>
+
+                                {/* Existing Schedule Information */}
+                                {existingSchedules[dateStr] && (
+                                  <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                    <div className="flex items-start">
+                                      <ExclamationTriangleIcon className="w-4 h-4 text-amber-500 mr-2 mt-0.5 flex-shrink-0" />
+                                      <div className="flex-1">
+                                        <p className="text-sm font-medium text-amber-800">
+                                          Existing Schedule Found
+                                        </p>
+                                        <p className="text-xs text-amber-700 mt-1">
+                                          This date already has a schedule: {existingSchedules[dateStr].startTime} - {existingSchedules[dateStr].endTime}
+                                        </p>
+                                        <div className="mt-2 text-xs text-amber-700">
+                                          <p className="font-medium">Available time slots:</p>
+                                          <ul className="mt-1 space-y-1">
+                                            {getAvailableTimeRanges(dateStr).map((range, idx) => (
+                                              <li key={idx} className="flex items-center">
+                                                <span className="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
+                                                {range.label}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Time Validation Messages */}
                                 {getTimeValidationMessage(customSchedule.startTime, customSchedule.endTime) && (
                                   <div className="text-red-600 text-xs mt-2 flex items-center">
                                     <ExclamationTriangleIcon className="w-4 h-4 mr-1" />
                                     {getTimeValidationMessage(customSchedule.startTime, customSchedule.endTime)}
+                                  </div>
+                                )}
+
+                                {/* Custom Slot Settings for this date */}
+                                {defaultSlots.customSlots && (
+                                  <div className="mt-3 p-3 bg-indigo-50 rounded-lg border border-indigo-200">
+                                    <div className="grid grid-cols-2 gap-3 mb-3">
+                                      <div>
+                                        <label className="block text-xs font-medium text-indigo-600 mb-1">
+                                          Number of Slots
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          max={getMaxSlotsForTimeRange(customSchedule.startTime, customSchedule.endTime)}
+                                          value={customSlotSettings[dateStr]?.totalSlots || defaultSlots.totalSlots}
+                                          onChange={(e) => {
+                                            const newSlots = parseInt(e.target.value) || defaultSlots.totalSlots;
+                                            const maxSlots = getMaxSlotsForTimeRange(customSchedule.startTime, customSchedule.endTime);
+                                            const totalSlots = Math.min(newSlots, maxSlots);
+                                            setCustomSlotSettings(prev => ({
+                                              ...prev,
+                                              [dateStr]: {
+                                                ...prev[dateStr],
+                                                totalSlots,
+                                                customSlots: true
+                                              }
+                                            }));
+                                          }}
+                                          className="w-full px-2 py-1 border border-indigo-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                                        />
+                                        <p className="text-xs text-indigo-500 mt-1">
+                                          Max: {getMaxSlotsForTimeRange(customSchedule.startTime, customSchedule.endTime)} slots
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <label className="block text-xs font-medium text-indigo-600 mb-1">
+                                          Duration per Slot
+                                        </label>
+                                        <input
+                                          type="text"
+                                          readOnly
+                                          value={customSchedule.startTime && customSchedule.endTime ? 
+                                            `${calculateSlotDuration(
+                                              customSchedule.startTime, 
+                                              customSchedule.endTime, 
+                                              customSlotSettings[dateStr]?.totalSlots || defaultSlots.totalSlots
+                                            )} min` : '0 min'}
+                                          className={`w-full px-2 py-1 bg-indigo-100 border rounded text-sm ${
+                                            customSchedule.startTime && customSchedule.endTime && 
+                                            !validateSlotDuration(
+                                              customSchedule.startTime, 
+                                              customSchedule.endTime, 
+                                              customSlotSettings[dateStr]?.totalSlots || defaultSlots.totalSlots
+                                            )?.isValid
+                                              ? 'border-red-300 text-red-700 bg-red-50' 
+                                              : 'border-indigo-200 text-indigo-700'
+                                          }`}
+                                        />
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Individual Date Validation Warning */}
+                                    {customSchedule.startTime && customSchedule.endTime && (
+                                      (() => {
+                                        const validation = validateSlotDuration(
+                                          customSchedule.startTime, 
+                                          customSchedule.endTime, 
+                                          customSlotSettings[dateStr]?.totalSlots || defaultSlots.totalSlots
+                                        );
+                                        if (!validation?.isValid) {
+                                          return (
+                                            <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs">
+                                              <div className="flex items-start">
+                                                <ExclamationTriangleIcon className="w-3 h-3 text-red-500 mr-1 mt-0.5 flex-shrink-0" />
+                                                <div>
+                                                  <p className="font-medium text-red-800">Slot too short!</p>
+                                                  <p className="text-red-700">{validation?.currentDuration} min per slot (min: 10 min)</p>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setCustomSlotSettings(prev => ({
+                                                      ...prev,
+                                                      [dateStr]: {
+                                                        ...prev[dateStr],
+                                                        totalSlots: validation?.maxSlots || defaultSlots.totalSlots,
+                                                        customSlots: true
+                                                      }
+                                                    }))}
+                                                    className="text-red-600 hover:text-red-800 font-medium underline mt-1"
+                                                  >
+                                                    Fix (set to {validation?.maxSlots} slots)
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          );
+                                        }
+                                        return null;
+                                      })()
+                                    )}
+                                    
+                                    {/* Mini Preview for this date */}
+                                    {customSchedule.startTime && customSchedule.endTime && (
+                                      <div className="text-xs text-indigo-600">
+                                        <details className="cursor-pointer">
+                                          <summary className="hover:text-indigo-800">Preview Slots ({customSlotSettings[dateStr]?.totalSlots || defaultSlots.totalSlots})</summary>
+                                          <div className="mt-2 grid grid-cols-1 gap-1 max-h-32 overflow-y-auto">
+                                            {generateTimeSlots(
+                                              customSchedule.startTime, 
+                                              customSchedule.endTime, 
+                                              customSlotSettings[dateStr]?.totalSlots || defaultSlots.totalSlots
+                                            ).map((slot, idx) => (
+                                              <div key={idx} className="flex justify-between p-1 bg-white rounded text-xs border border-indigo-100">
+                                                <span>Slot {slot.slotNumber}</span>
+                                                <span>{slot.startTime}-{slot.endTime}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </details>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -3417,6 +4604,62 @@ const DoctorDashboard = () => {
                         </div>
                       </div>
                     )}
+
+                    {/* Conflicts Summary */}
+                    {selectedDates.length > 0 && (() => {
+                      const conflictedDates = selectedDates.filter(date => {
+                        const dateStr = typeof date === 'string' ? date : formatDateString(date);
+                        return existingSchedules[dateStr];
+                      });
+                      
+                      if (conflictedDates.length > 0) {
+                        return (
+                          <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                            <div className="flex items-start">
+                              <ExclamationTriangleIcon className="w-5 h-5 text-amber-500 mr-3 mt-0.5 flex-shrink-0" />
+                              <div className="flex-1">
+                                <h4 className="text-sm font-medium text-amber-800 mb-2">
+                                  Schedule Conflicts Detected ({conflictedDates.length} dates)
+                                </h4>
+                                <p className="text-xs text-amber-700 mb-3">
+                                  The following dates have existing schedules. You can only schedule before or after the existing times:
+                                </p>
+                                <div className="space-y-2">
+                                  {conflictedDates.slice(0, 3).map(date => {
+                                    const dateStr = typeof date === 'string' ? date : formatDateString(date);
+                                    const existing = existingSchedules[dateStr];
+                                    const ranges = getAvailableTimeRanges(dateStr);
+                                    return (
+                                      <div key={dateStr} className="text-xs">
+                                        <p className="font-medium text-amber-800">
+                                          {new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { 
+                                            weekday: 'short', 
+                                            month: 'short', 
+                                            day: 'numeric' 
+                                          })}
+                                        </p>
+                                        <p className="text-amber-700 ml-2">
+                                          Existing: {existing.startTime} - {existing.endTime}
+                                        </p>
+                                        <p className="text-green-700 ml-2">
+                                          Available: {ranges.map(r => r.label).join(', ')}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                  {conflictedDates.length > 3 && (
+                                    <p className="text-xs text-amber-600 italic">
+                                      ... and {conflictedDates.length - 3} more dates with conflicts
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
 
                     {/* Save Button */}
                     <div className="mt-6">
@@ -4456,6 +5699,97 @@ const DoctorDashboard = () => {
               />
             </div>
 
+            {/* Slot Configuration */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Number of Patient Slots
+              </label>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <input
+                    type="number"
+                    min="1"
+                    max={getMaxSlotsForTimeRange(scheduleSetup.startTime, scheduleSetup.endTime)}
+                    value={scheduleSetup.totalSlots}
+                    onChange={(e) => {
+                      const newSlots = parseInt(e.target.value) || 6;
+                      const maxSlots = getMaxSlotsForTimeRange(scheduleSetup.startTime, scheduleSetup.endTime);
+                      handleScheduleSetupChange('totalSlots', Math.min(newSlots, maxSlots));
+                    }}
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="6"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Total slots (max: {getMaxSlotsForTimeRange(scheduleSetup.startTime, scheduleSetup.endTime)})
+                  </p>
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    readOnly
+                    value={scheduleSetup.startTime && scheduleSetup.endTime ? 
+                      `${calculateSlotDuration(scheduleSetup.startTime, scheduleSetup.endTime, scheduleSetup.totalSlots)} min` : 
+                      '0 min'}
+                    className={`w-full p-3 bg-gray-100 border rounded-lg ${
+                      scheduleSetup.startTime && scheduleSetup.endTime && 
+                      !validateSlotDuration(scheduleSetup.startTime, scheduleSetup.endTime, scheduleSetup.totalSlots)?.isValid
+                        ? 'border-red-300 text-red-600 bg-red-50' 
+                        : 'border-gray-300 text-gray-600'
+                    }`}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Time per slot (min: 10 min)</p>
+                </div>
+              </div>
+              
+              {/* Schedule Setup Validation Warning */}
+              {scheduleSetup.startTime && scheduleSetup.endTime && (
+                (() => {
+                  const validation = validateSlotDuration(scheduleSetup.startTime, scheduleSetup.endTime, scheduleSetup.totalSlots);
+                  if (!validation?.isValid) {
+                    return (
+                      <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                        <div className="flex items-start">
+                          <ExclamationTriangleIcon className="w-4 h-4 text-red-500 mr-2 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-red-800">Invalid Slot Duration</p>
+                            <p className="text-xs text-red-700 mt-1">{validation?.message}</p>
+                            <button
+                              type="button"
+                              onClick={() => handleScheduleSetupChange('totalSlots', validation?.maxSlots || 6)}
+                              className="text-xs text-red-600 hover:text-red-800 font-medium mt-2 underline"
+                            >
+                              Auto-fix: Set to {validation?.maxSlots} slots
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()
+              )}
+              
+              {/* Slot Preview */}
+              {scheduleSetup.startTime && scheduleSetup.endTime && (
+                <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <h4 className="text-sm font-medium text-blue-800 mb-2">Time Slot Preview:</h4>
+                  <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                    {generateTimeSlots(scheduleSetup.startTime, scheduleSetup.endTime, scheduleSetup.totalSlots).slice(0, 6).map((slot, index) => (
+                      <div key={index} className="text-xs p-2 bg-white rounded border border-blue-200 flex justify-between">
+                        <span className="font-medium">Slot {slot.slotNumber}</span>
+                        <span>{slot.startTime}-{slot.endTime}</span>
+                      </div>
+                    ))}
+                    {generateTimeSlots(scheduleSetup.startTime, scheduleSetup.endTime, scheduleSetup.totalSlots).length > 6 && (
+                      <div className="col-span-2 text-xs text-blue-600 text-center py-1">
+                        ... and {generateTimeSlots(scheduleSetup.startTime, scheduleSetup.endTime, scheduleSetup.totalSlots).length - 6} more slots
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {scheduleSetupError && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                 <p className="text-sm text-red-600">{scheduleSetupError}</p>
@@ -4559,5 +5893,380 @@ const DoctorDashboard = () => {
   );
 };
 
+// Calendar Component for Appointment Selection
+const AppointmentCalendar = ({ selectedDate, onDateSelect, appointments = [] }) => {
+  const [currentMonth, setCurrentMonth] = useState(selectedDate);
+  
+  const today = new Date();
+  const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+  const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+  const startCalendar = new Date(monthStart);
+  startCalendar.setDate(startCalendar.getDate() - monthStart.getDay());
+  
+  const endCalendar = new Date(monthEnd);
+  endCalendar.setDate(endCalendar.getDate() + (6 - monthEnd.getDay()));
+  
+  const days = [];
+  let day = new Date(startCalendar);
+  
+  while (day <= endCalendar) {
+    days.push(new Date(day));
+    day.setDate(day.getDate() + 1);
+  }
+  
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  
+  const hasAppointments = (date) => {
+    const dateStr = date.toISOString().split('T')[0];
+    return appointments.some(apt => 
+      new Date(apt.appointmentDate).toISOString().split('T')[0] === dateStr
+    );
+  };
+  
+  const getAppointmentCount = (date) => {
+    const dateStr = date.toISOString().split('T')[0];
+    return appointments.filter(apt => 
+      new Date(apt.appointmentDate).toISOString().split('T')[0] === dateStr
+    ).length;
+  };
+  
+  const handleDateClick = (clickedDate) => {
+    if (clickedDate.toDateString() === selectedDate.toDateString()) {
+      // If clicking the same date, deselect and go back to today
+      onDateSelect(today);
+    } else {
+      // Select the new date
+      onDateSelect(clickedDate);
+    }
+  };
+  
+  const goToPrevMonth = () => {
+    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
+  };
+  
+  const goToNextMonth = () => {
+    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
+  };
+  
+  return (
+    <div className="w-full">
+      {/* Calendar Header */}
+      <div className="flex items-center justify-between mb-4">
+        <button
+          onClick={goToPrevMonth}
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <ChevronLeftIcon className="h-5 w-5 text-gray-600" />
+        </button>
+        <h3 className="text-lg font-semibold text-gray-900">
+          {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
+        </h3>
+        <button
+          onClick={goToNextMonth}
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <ChevronRightIcon className="h-5 w-5 text-gray-600" />
+        </button>
+      </div>
+      
+      {/* Day Labels */}
+      <div className="grid grid-cols-7 gap-1 mb-2">
+        {dayNames.map(dayName => (
+          <div key={dayName} className="text-center text-xs font-medium text-gray-500 py-2">
+            {dayName}
+          </div>
+        ))}
+      </div>
+      
+      {/* Calendar Grid */}
+      <div className="grid grid-cols-7 gap-1">
+        {days.map((day, index) => {
+          const isToday = day.toDateString() === today.toDateString();
+          const isSelected = day.toDateString() === selectedDate.toDateString();
+          const isCurrentMonth = day.getMonth() === currentMonth.getMonth();
+          const isPastDate = day < today && !isToday;
+          const appointmentCount = getAppointmentCount(day);
+          
+          return (
+            <button
+              key={index}
+              onClick={() => !isPastDate && handleDateClick(day)}
+              disabled={isPastDate}
+              className={`relative h-10 w-10 text-sm rounded-lg transition-colors border-2 ${
+                isPastDate
+                  ? 'text-gray-300 bg-gray-50 border-gray-200 cursor-not-allowed'
+                  : isSelected
+                  ? 'bg-white text-blue-600 border-blue-600 font-semibold'
+                  : isToday
+                  ? 'bg-white text-blue-600 border-blue-300 font-semibold'
+                  : isCurrentMonth
+                  ? 'text-gray-900 border-transparent hover:border-gray-300 hover:bg-gray-50'
+                  : 'text-gray-400 border-transparent hover:border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {day.getDate()}
+              {appointmentCount > 0 && !isPastDate && (
+                <div className={`absolute -top-1 -right-1 h-4 w-4 text-xs rounded-full flex items-center justify-center border ${
+                  isSelected 
+                    ? 'bg-blue-600 text-white border-blue-600' 
+                    : isToday
+                    ? 'bg-blue-500 text-white border-blue-500'
+                    : 'bg-red-500 text-white border-red-500'
+                }`}>
+                  {appointmentCount}
+                </div>
+              )}
+              {appointmentCount > 0 && isPastDate && (
+                <div className="absolute -top-1 -right-1 h-4 w-4 text-xs rounded-full flex items-center justify-center bg-gray-300 text-gray-500 border border-gray-300">
+                  {appointmentCount}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      
+      {/* Legend */}
+      <div className="mt-4 space-y-2 text-xs text-gray-600">
+        <div className="flex items-center">
+          <div className="w-3 h-3 border-2 border-blue-600 bg-white rounded mr-2"></div>
+          <span>Selected date</span>
+        </div>
+        <div className="flex items-center">
+          <div className="w-3 h-3 border-2 border-blue-300 bg-white rounded mr-2"></div>
+          <span>Today</span>
+        </div>
+        <div className="flex items-center">
+          <div className="w-3 h-3 bg-red-500 rounded mr-2"></div>
+          <span>Has appointments</span>
+        </div>
+        <div className="flex items-center">
+          <div className="w-3 h-3 bg-gray-300 border border-gray-400 rounded mr-2"></div>
+          <span>Past dates (disabled)</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Appointment Card Component
+const AppointmentCard = ({ appointment }) => {
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'confirmed': return 'bg-green-100 text-green-800 border-green-200';
+      case 'scheduled': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'completed': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'cancelled': return 'bg-red-100 text-red-800 border-red-200';
+      case 'no-show': return 'bg-red-100 text-red-800 border-red-200';
+      default: return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+  
+  const getPriorityColor = (priority) => {
+    switch (priority) {
+      case 'high': return 'bg-red-100 text-red-800';
+      case 'medium': return 'bg-yellow-100 text-yellow-800';
+      case 'low': return 'bg-green-100 text-green-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getTypeIcon = (type) => {
+    switch (type) {
+      case 'Video Call':
+      case 'consultation':
+        return <VideoCameraIcon className="h-4 w-4 mr-1 text-green-500" />;
+      case 'In-person':
+      case 'checkup':
+        return <BuildingOfficeIcon className="h-4 w-4 mr-1 text-purple-500" />;
+      case 'Follow-up':
+      case 'follow-up':
+        return <DocumentTextIcon className="h-4 w-4 mr-1 text-blue-500" />;
+      case 'Emergency':
+      case 'emergency':
+        return <ExclamationTriangleIcon className="h-4 w-4 mr-1 text-red-500" />;
+      default:
+        return <ClockIcon className="h-4 w-4 mr-1 text-gray-500" />;
+    }
+  };
+
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  const handleVideoConsultation = () => {
+    // Add video consultation logic here
+    console.log('Starting video consultation for appointment:', appointment.id);
+    // You can implement actual video call integration here
+  };
+
+  const handleMarkCompleted = () => {
+    // Add mark as completed logic here
+    console.log('Marking appointment as completed:', appointment.id);
+  };
+
+  const handleAddNotes = () => {
+    // Add notes functionality
+    console.log('Adding notes for appointment:', appointment.id);
+  };
+
+  const handleViewPatientHistory = () => {
+    // View patient history
+    console.log('Viewing patient history for:', appointment.patientId);
+  };
+  
+  return (
+    <div className="p-6 hover:bg-gray-50 transition-colors">
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between space-y-4 lg:space-y-0">
+        {/* Patient Info */}
+        <div className="flex items-start space-x-4 flex-1">
+          <div className="h-14 w-14 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-lg">
+            {appointment.patient?.charAt(0) || 'P'}
+            {appointment.patient?.split(' ')[1]?.charAt(0) || 'A'}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center space-x-3 mb-2">
+              <h4 className="text-lg font-semibold text-gray-900">
+                {appointment.patient || 'Unknown Patient'}
+              </h4>
+              {appointment.priority && appointment.priority !== 'normal' && (
+                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(appointment.priority)}`}>
+                  {appointment.priority === 'high' ? '🔴' : appointment.priority === 'medium' ? '🟡' : '🟢'} {appointment.priority}
+                </span>
+              )}
+            </div>
+            
+            {/* Appointment Details */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-gray-600 mb-3">
+              <div className="flex items-center">
+                <ClockIcon className="h-4 w-4 mr-1 text-blue-500" />
+                <span className="font-medium">{appointment.timeSlot}</span>
+              </div>
+              <div className="flex items-center">
+                <CalendarIcon className="h-4 w-4 mr-1 text-green-500" />
+                <span>{formatDate(appointment.appointmentDate)}</span>
+              </div>
+              <div className="flex items-center">
+                {getTypeIcon(appointment.type)}
+                <span>{appointment.type}</span>
+              </div>
+              <div className="flex items-center">
+                <span className="font-medium">Duration:</span>
+                <span className="ml-1">{appointment.duration} min</span>
+              </div>
+            </div>
+
+            {/* Patient Details */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm text-gray-600 mb-3">
+              <div className="flex items-center">
+                <UserIcon className="h-4 w-4 mr-1 text-gray-500" />
+                <span>ID: {appointment.patientId}</span>
+              </div>
+              {appointment.gender && (
+                <div className="flex items-center">
+                  <span className={`h-2 w-2 rounded-full mr-2 ${
+                    appointment.gender === 'Male' ? 'bg-blue-500' : 'bg-pink-500'
+                  }`}></span>
+                  <span>{appointment.gender}</span>
+                </div>
+              )}
+              {appointment.patientPhone && appointment.patientPhone !== 'No phone' && (
+                <div className="flex items-center">
+                  <span className="font-medium">Phone:</span>
+                  <span className="ml-1">{appointment.patientPhone}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Reason for Visit */}
+            {appointment.symptoms && appointment.symptoms !== 'No reason provided' && (
+              <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                <p className="text-sm font-medium text-gray-700 mb-1">Reason for Visit:</p>
+                <p className="text-sm text-gray-600">{appointment.symptoms}</p>
+              </div>
+            )}
+            
+            {/* Contact Info */}
+            {appointment.patientEmail && appointment.patientEmail !== 'No email' && (
+              <div className="text-xs text-gray-500">
+                <span className="font-medium">Email:</span> {appointment.patientEmail}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Status and Actions */}
+        <div className="flex flex-col items-start lg:items-end space-y-3 lg:ml-6">
+          <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(appointment.status)}`}>
+            <span className={`h-2 w-2 rounded-full mr-2 ${
+              appointment.status === 'confirmed' ? 'bg-green-500' : 
+              appointment.status === 'completed' ? 'bg-blue-500' :
+              appointment.status === 'cancelled' ? 'bg-red-500' : 'bg-yellow-500'
+            }`}></span>
+            {appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1)}
+          </span>
+          
+          {/* Action Buttons */}
+          <div className="flex flex-wrap gap-2">
+            {(appointment.type === 'Video Call' || appointment.type === 'consultation') && appointment.status === 'scheduled' && (
+              <button 
+                onClick={handleVideoConsultation}
+                className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center"
+              >
+                <VideoCameraIcon className="h-4 w-4 mr-1" />
+                Start Video Call
+              </button>
+            )}
+            
+            {appointment.status === 'scheduled' && (
+              <button 
+                onClick={handleMarkCompleted}
+                className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center"
+              >
+                <CheckCircleIcon className="h-4 w-4 mr-1" />
+                Mark Complete
+              </button>
+            )}
+            
+            <button 
+              onClick={handleViewPatientHistory}
+              className="px-3 py-1.5 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors flex items-center"
+            >
+              <UserIcon className="h-4 w-4 mr-1" />
+              Patient History
+            </button>
+            
+            <button 
+              onClick={handleAddNotes}
+              className="px-3 py-1.5 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors flex items-center"
+            >
+              <PencilIcon className="h-4 w-4 mr-1" />
+              Add Notes
+            </button>
+          </div>
+          
+          {/* Appointment Metadata */}
+          <div className="text-xs text-gray-400 text-right">
+            <div>Slot ID: {appointment.slotId}</div>
+            <div>Created: {new Date(appointment.createdAt).toLocaleDateString()}</div>
+            {appointment.updatedAt !== appointment.createdAt && (
+              <div>Updated: {new Date(appointment.updatedAt).toLocaleDateString()}</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default DoctorDashboard;
