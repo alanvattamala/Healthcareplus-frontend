@@ -9,5 +9,12 @@ export default defineConfig({
   server: {
     host: true, // Enable network access
     port: 5173, // Default port
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      }
+    }
   },
 })

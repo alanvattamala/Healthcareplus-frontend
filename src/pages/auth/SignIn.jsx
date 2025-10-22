@@ -85,44 +85,7 @@ const SignIn = () => {
       }
     } catch (error) {
       console.error('Login error:', error);
-      // For demo purposes, allow demo login with different roles
-      toast.info('Demo mode: Using demo credentials');
-      
-      // Demo authentication - determine role based on email
-      let role = 'patient'; // default
-      let verificationStatus = undefined;
-      
-      if (formData.email.includes('admin')) {
-        role = 'admin';
-      } else if (formData.email.includes('doctor') || formData.email.includes('dr')) {
-        role = 'doctor';
-        // For demo purposes, set different verification statuses based on email
-        if (formData.email.includes('pending')) {
-          verificationStatus = 'pending';
-        } else if (formData.email.includes('rejected')) {
-          verificationStatus = 'rejected';
-        } else {
-          verificationStatus = 'verified'; // Default for demo doctors
-        }
-      }
-      
-      const demoUser = {
-        id: `demo-${role}-001`,
-        email: formData.email,
-        name: role === 'admin' ? 'Admin User' : role === 'doctor' ? 'Dr. Demo User' : 'Demo Patient',
-        firstName: role === 'admin' ? 'Admin' : role === 'doctor' ? 'Dr. Demo' : 'Demo',
-        lastName: 'User',
-        role: role,
-        userType: role,
-        verificationStatus: verificationStatus,
-        specialization: role === 'doctor' ? 'General Medicine' : undefined
-      };
-      
-      authenticateUser(demoUser, `demo-${role}-token-123`);
-      
-      setTimeout(() => {
-        navigate(getDashboardRoute());
-      }, 1500);
+      toast.error('Login failed. Please check your credentials and try again.');
     } finally {
       setIsLoading(false);
     }

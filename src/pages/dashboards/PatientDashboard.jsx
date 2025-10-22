@@ -5,6 +5,8 @@ import 'react-toastify/dist/ReactToastify.css';
 import Swal from 'sweetalert2';
 import { Card, Button, Modal } from '../../components';
 import { handleLogout, getCurrentUser, requireRole, checkAuthAndRedirect } from '../../utils/auth';
+import VideoCallManager from '../../utils/videoCallManager';
+import paymentService from '../../services/paymentService';
 import {
   BellIcon,
   UserIcon,
@@ -30,7 +32,10 @@ import {
   ClockIcon,
   ExclamationTriangleIcon,
   CheckCircleIcon,
-  ArrowPathIcon
+  ArrowPathIcon,
+  VideoCameraSlashIcon,
+  MicrophoneIcon,
+  SpeakerXMarkIcon
 } from '@heroicons/react/24/outline';
 
 const PatientDashboard = () => {
@@ -61,6 +66,7 @@ const PatientDashboard = () => {
   const [availableDoctors, setAvailableDoctors] = useState([]);
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [selectedDoctor, setSelectedDoctor] = useState(null);
+  const [processingSlot, setProcessingSlot] = useState(null); // Track which slot is being processed
   const [appointmentData, setAppointmentData] = useState({
     date: '',
     time: '',
@@ -94,10 +100,30 @@ const PatientDashboard = () => {
   const [scheduleFilter, setScheduleFilter] = useState('all');
   const [scheduleSort, setScheduleSort] = useState('date-asc');
   const [scheduleSearch, setScheduleSearch] = useState('');
+
+  // Video call states
+  const [showIncomingCall, setShowIncomingCall] = useState(false);
+  const [incomingCallData, setIncomingCallData] = useState(null);
+  const [showVideoCallModal, setShowVideoCallModal] = useState(false);
+  const [callStatus, setCallStatus] = useState('idle'); // 'idle', 'ringing', 'connected'
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [callDuration, setCallDuration] = useState(0);
+  const [availableCall, setAvailableCall] = useState(null); // Stores doctor's call info when call is initiated
+  const [currentAppointment, setCurrentAppointment] = useState(null);
   
   const notificationRef = useRef(null);
   const profileRef = useRef(null);
   const quickActionsRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const socketRef = useRef(null);
+  const callStartTimeRef = useRef(null);
+  const callTimerRef = useRef(null);
+  const videoCallManagerRef = useRef(null);
 
   // Helper functions for date and time validation
   const isDateInPast = (date) => {
@@ -133,41 +159,8 @@ const PatientDashboard = () => {
     return false;
   };
 
-  // Mock notifications data
-  const notifications = [
-    {
-      id: 1,
-      title: 'Appointment Reminder',
-      message: 'You have an appointment with Dr. Sarah Johnson tomorrow at 10:30 AM',
-      time: '5 minutes ago',
-      type: 'appointment',
-      unread: true
-    },
-    {
-      id: 2,
-      title: 'Lab Results Available',
-      message: 'Your recent blood test results are now available in your medical records',
-      time: '2 hours ago',
-      type: 'results',
-      unread: true
-    },
-    {
-      id: 3,
-      title: 'Medication Reminder',
-      message: 'Time to take your evening medication - Lisinopril 10mg',
-      time: '4 hours ago',
-      type: 'medication',
-      unread: false
-    },
-    {
-      id: 4,
-      title: 'Health Tip',
-      message: 'Remember to stay hydrated! Aim for 8 glasses of water today.',
-      time: '1 day ago',
-      type: 'tip',
-      unread: false
-    }
-  ];
+  // Notifications data - will be populated from API calls
+  const notifications = [];
 
   const unreadCount = notifications.filter(notification => notification.unread).length;
 
@@ -318,49 +311,189 @@ const PatientDashboard = () => {
     };
   };
 
+  // Video call functions
+  const acceptCall = async () => {
+    try {
+      if (videoCallManagerRef.current && incomingCallData) {
+        await videoCallManagerRef.current.acceptCall(incomingCallData.appointmentId);
+        Swal.close(); // Close the incoming call dialog
+      }
+    } catch (error) {
+      console.error('Error accepting call:', error);
+      
+      // Check if it's a permission error and offer alternatives
+      if (error.message && (error.message.includes('denied') || error.message.includes('permission'))) {
+        Swal.fire({
+          title: 'Camera/Microphone Access Required',
+          html: `
+            <div class="text-left">
+              <p class="mb-4">${error.message}</p>
+              <p class="mb-4"><strong>To join the video call, please:</strong></p>
+              <ol class="list-decimal list-inside space-y-2 mb-4">
+                <li>Click the camera/microphone icon in your browser's address bar</li>
+                <li>Select "Allow" for camera and microphone access</li>
+                <li>Refresh the page and try joining the call again</li>
+              </ol>
+              <p class="text-sm text-gray-600">Would you like to try joining with audio only?</p>
+            </div>
+          `,
+          icon: 'warning',
+          showCancelButton: true,
+          confirmButtonText: 'Try Audio Only',
+          cancelButtonText: 'Cancel',
+          confirmButtonColor: '#3b82f6',
+          cancelButtonColor: '#6b7280'
+        }).then(async (result) => {
+          if (result.isConfirmed) {
+            try {
+              // Try to accept call with audio only
+              await videoCallManagerRef.current.acceptCallAudioOnly(incomingCallData.appointmentId);
+              Swal.close();
+            } catch (audioError) {
+              console.error('Error accepting audio-only call:', audioError);
+              Swal.fire({
+                title: 'Error',
+                text: 'Failed to join call. Please check your microphone permissions and try again.',
+                icon: 'error',
+                confirmButtonColor: '#ef4444'
+              });
+              setCallStatus('idle');
+              setShowIncomingCall(false);
+              setAvailableCall(null);
+            }
+          } else {
+            setCallStatus('idle');
+            setShowIncomingCall(false);
+            setAvailableCall(null);
+          }
+        });
+      } else {
+        Swal.fire({
+          title: 'Error',
+          text: error.message || 'Failed to accept call. Please check your camera and microphone permissions.',
+          icon: 'error',
+          confirmButtonColor: '#ef4444'
+        });
+        setCallStatus('idle');
+        setShowIncomingCall(false);
+        setAvailableCall(null);
+      }
+    }
+  };
+
+  const declineCall = () => {
+    if (videoCallManagerRef.current && incomingCallData) {
+      videoCallManagerRef.current.declineCall(incomingCallData.appointmentId);
+      setShowIncomingCall(false);
+      setIncomingCallData(null);
+      setAvailableCall(null);
+      setCallStatus('idle');
+      Swal.close(); // Close the incoming call dialog
+    }
+  };
+
+  const checkMediaPermissions = async () => {
+    try {
+      // Check if mediaDevices is supported
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Media devices not supported in this browser');
+      }
+      
+      // Check permissions if available
+      if (navigator.permissions) {
+        const cameraPermission = await navigator.permissions.query({ name: 'camera' });
+        const micPermission = await navigator.permissions.query({ name: 'microphone' });
+        
+        console.log('📹 Camera permission:', cameraPermission.state);
+        console.log('🎤 Microphone permission:', micPermission.state);
+        
+        if (cameraPermission.state === 'denied' || micPermission.state === 'denied') {
+          return {
+            granted: false,
+            message: 'Camera or microphone access is blocked. Please enable permissions in your browser settings.'
+          };
+        }
+      }
+      
+      return { granted: true };
+    } catch (error) {
+      console.log('Permission check not available:', error);
+      return { granted: true }; // Assume permissions are OK if we can't check
+    }
+  };
+
+  const joinCall = async () => {
+    if (availableCall) {
+      // Check permissions first
+      const permissionCheck = await checkMediaPermissions();
+      
+      if (!permissionCheck.granted) {
+        Swal.fire({
+          title: 'Permissions Required',
+          text: permissionCheck.message,
+          icon: 'warning',
+          confirmButtonText: 'Continue Anyway',
+          showCancelButton: true,
+          cancelButtonText: 'Cancel',
+          confirmButtonColor: '#3b82f6'
+        }).then((result) => {
+          if (result.isConfirmed) {
+            acceptCall();
+          }
+        });
+      } else {
+        acceptCall();
+      }
+    }
+  };
+
+  const endCall = () => {
+    if (videoCallManagerRef.current) {
+      videoCallManagerRef.current.endCall();
+    }
+    
+    // Stop call timer
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    
+    setCallStatus('idle');
+    setShowVideoCallModal(false);
+    setShowIncomingCall(false);
+    setAvailableCall(null);
+  };
+
+  const toggleVideo = () => {
+    if (videoCallManagerRef.current) {
+      const enabled = videoCallManagerRef.current.toggleVideo();
+      setIsVideoEnabled(enabled);
+    }
+  };
+
+  const toggleAudio = () => {
+    if (videoCallManagerRef.current) {
+      const enabled = videoCallManagerRef.current.toggleAudio();
+      setIsAudioEnabled(enabled);
+    }
+  };
+
+  // Format call duration
+  const formatCallDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   // Fetch scheduled appointments from database
   const fetchScheduledAppointments = async () => {
     setIsLoadingSchedules(true);
     try {
       const token = localStorage.getItem('token');
       if (!token) {
-        console.log('No token found, using placeholder data');
-        // Use placeholder data if no authentication
-        const placeholderAppointments = [
-          {
-            id: 1,
-            doctor: 'Dr. Sarah Johnson',
-            specialty: 'Cardiologist',
-            date: '2024-09-28',
-            time: '10:00 AM',
-            type: 'In-person',
-            avatar: null,
-            rating: 4.8,
-            status: 'scheduled'
-          },
-          {
-            id: 2,
-            doctor: 'Dr. Michael Chen',
-            specialty: 'Neurologist',
-            date: '2024-09-30',
-            time: '2:00 PM',
-            type: 'Video Call',
-            avatar: null,
-            rating: 4.9,
-            status: 'scheduled'
-          }
-        ];
-        setUpcomingAppointments(placeholderAppointments);
-        const placeholderSchedules = placeholderAppointments.map(appt => ({
-          date: appt.date,
-          hasSchedule: true,
-          doctorId: appt.id,
-          doctorName: appt.doctor,
-          time: appt.time,
-          times: [appt.time],
-          status: appt.status
-        }));
-        setScheduledDates(placeholderSchedules);
+        console.log('No token found, redirecting to login');
+        setUpcomingAppointments([]);
+        setScheduledDates([]);
         return;
       }
 
@@ -703,25 +836,14 @@ const PatientDashboard = () => {
           return;
         }
 
-        // For demo purposes, create mock patient data if none exists or if role is missing
-        let patientData = userData;
-        if (!patientData.role) {
-          patientData = {
-            ...userData,
-            id: '12345',
-            firstName: 'John',
-            lastName: 'Doe',
-            name: 'John Doe',
-            email: 'john.doe@example.com',
-            role: 'patient'
-          };
-          
-          // Update localStorage with role
-          localStorage.setItem('user', JSON.stringify(patientData));
-          localStorage.setItem('token', 'demo-patient-token-123');
+        // Check if user has proper patient role
+        if (!userData.role || userData.role !== 'patient') {
+          console.error('User is not a patient or role is missing');
+          navigate('/auth/signin');
+          return;
         }
         
-        setUser(patientData);
+        setUser(userData);
         
         // Make test function available globally for debugging
         window.testAppointmentAPI = async () => {
@@ -783,6 +905,121 @@ const PatientDashboard = () => {
     checkAuth();
   }, [navigate]);
 
+  // Initialize video call manager
+  useEffect(() => {
+    if (user && user.userType === 'patient') {
+      videoCallManagerRef.current = new VideoCallManager();
+      
+      // Debug: Log user details
+      console.log('👤 Patient registering for video calls:', user);
+      console.log('👤 Patient ID:', user.id);
+      console.log('👤 Patient Type:', user.userType);
+      
+      // Connect to video call server
+      videoCallManagerRef.current.connect(user.id, 'patient');
+      
+      // Set up callbacks
+      videoCallManagerRef.current.setCallbacks({
+        onLocalStreamReceived: (stream) => {
+          setLocalStream(stream);
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
+          }
+        },
+        onRemoteStreamReceived: (stream) => {
+          setRemoteStream(stream);
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = stream;
+          }
+        },
+        onCallEnded: () => {
+          setCallStatus('idle');
+          setShowVideoCallModal(false);
+          setShowIncomingCall(false);
+          setAvailableCall(null);
+          setLocalStream(null);
+          setRemoteStream(null);
+          if (callTimerRef.current) {
+            clearInterval(callTimerRef.current);
+          }
+          Swal.fire({
+            title: 'Call Ended',
+            text: 'The video call has been ended.',
+            icon: 'info',
+            confirmButtonColor: '#10b981'
+          });
+        },
+        onIncomingCall: (callData) => {
+          console.log('📞 Incoming call from doctor:', callData);
+          setIncomingCallData(callData);
+          setAvailableCall(callData);
+          setShowIncomingCall(true);
+          setCallStatus('ringing');
+          
+          // Show incoming call notification
+          Swal.fire({
+            title: 'Incoming Video Call',
+            text: `Dr. ${callData.doctorName} is calling for consultation`,
+            icon: 'info',
+            showCancelButton: true,
+            confirmButtonText: 'Accept',
+            cancelButtonText: 'Decline',
+            confirmButtonColor: '#10b981',
+            cancelButtonColor: '#ef4444',
+            allowOutsideClick: false,
+            allowEscapeKey: false,
+            timer: 30000, // Auto-decline after 30 seconds
+            timerProgressBar: true
+          }).then((result) => {
+            if (result.isConfirmed) {
+              acceptCall();
+            } else {
+              declineCall();
+            }
+          });
+        },
+        onCallAccepted: ({ appointmentId }) => {
+          setCallStatus('connected');
+          setShowVideoCallModal(true);
+          setShowIncomingCall(false);
+          
+          callStartTimeRef.current = Date.now();
+          
+          // Start call timer
+          callTimerRef.current = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
+            setCallDuration(elapsed);
+          }, 1000);
+          
+          Swal.close(); // Close any open alerts
+        },
+        onCallDeclined: () => {
+          setCallStatus('idle');
+          setShowIncomingCall(false);
+          setAvailableCall(null);
+          Swal.close();
+        },
+        onCallFailed: ({ reason }) => {
+          setCallStatus('idle');
+          setShowIncomingCall(false);
+          setAvailableCall(null);
+          Swal.fire({
+            title: 'Call Failed',
+            text: reason || 'Failed to join video call.',
+            icon: 'error',
+            confirmButtonColor: '#ef4444'
+          });
+        }
+      });
+      
+      return () => {
+        if (videoCallManagerRef.current) {
+          videoCallManagerRef.current.disconnect();
+        }
+      };
+    }
+  }, [user]);
+
   // Update current time every minute
   useEffect(() => {
     const timer = setInterval(() => {
@@ -794,6 +1031,73 @@ const PatientDashboard = () => {
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // WebSocket connection setup for video consultation
+  useEffect(() => {
+    const connectWebSocket = () => {
+      try {
+        socketRef.current = new WebSocket('ws://localhost:3002');
+        
+        socketRef.current.onopen = () => {
+          console.log('📱 Patient WebSocket connected');
+          // Register as patient
+          const token = localStorage.getItem('token');
+          if (token) {
+            socketRef.current.send(JSON.stringify({
+              type: 'register',
+              token: token,
+              userType: 'patient'
+            }));
+          }
+        };
+
+        socketRef.current.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          console.log('📱 Patient received message:', data);
+          
+          switch (data.type) {
+            case 'call-accepted':
+              handleCallAccepted(data);
+              break;
+            case 'call-declined':
+              handleCallDeclined(data);
+              break;
+            case 'call-ended':
+              handleCallEnded(data);
+              break;
+            case 'webrtc-offer':
+            case 'webrtc-answer':
+            case 'webrtc-ice-candidate':
+              handleWebRTCMessage(data);
+              break;
+            default:
+              break;
+          }
+        };
+
+        socketRef.current.onclose = () => {
+          console.log('📱 Patient WebSocket disconnected');
+          // Attempt to reconnect after 3 seconds
+          setTimeout(connectWebSocket, 3000);
+        };
+
+        socketRef.current.onerror = (error) => {
+          console.error('📱 Patient WebSocket error:', error);
+        };
+      } catch (error) {
+        console.error('📱 Failed to connect WebSocket:', error);
+      }
+    };
+
+    connectWebSocket();
+
+    // Cleanup on component unmount
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.close();
+      }
+    };
   }, []);
 
   // Handle clicks outside dropdowns
@@ -883,63 +1187,10 @@ const PatientDashboard = () => {
     });
   };
 
-  // Enhanced mock data with more details - will be replaced by database data
-  // const upcomingAppointments will be populated from scheduledDates state
-
-  const recentPrescriptions = [
-    { 
-      id: 1, 
-      doctor: 'Dr. Sarah Johnson', 
-      medication: 'Lisinopril 10mg', 
-      date: '2025-07-28', 
-      status: 'Active',
-      dosage: 'Once daily',
-      refills: 2
-    },
-    { 
-      id: 2, 
-      doctor: 'Dr. Michael Chen', 
-      medication: 'Metformin 500mg', 
-      date: '2025-07-25', 
-      status: 'Completed',
-      dosage: 'Twice daily',
-      refills: 0
-    }
-  ];
-
-  const healthTips = [
-    { 
-      id: 1, 
-      title: 'Stay Hydrated', 
-      content: 'Drink at least 8 glasses of water daily for optimal health and better circulation.',
-      category: 'Wellness',
-      icon: 'water',
-      readTime: '2 min read'
-    },
-    { 
-      id: 2, 
-      title: 'Regular Exercise', 
-      content: '30 minutes of moderate exercise can improve your cardiovascular health significantly.',
-      category: 'Fitness',
-      icon: 'fitness',
-      readTime: '3 min read'
-    },
-    { 
-      id: 3, 
-      title: 'Balanced Diet', 
-      content: 'Include fruits, vegetables, and whole grains in your daily meals for better nutrition.',
-      category: 'Nutrition',
-      icon: 'nutrition',
-      readTime: '4 min read'
-    }
-  ];
-
-  const vitalsTrends = [
-    { metric: 'Blood Pressure', value: '120/80', status: 'normal', trend: 'stable', color: 'green' },
-    { metric: 'Heart Rate', value: '72 bpm', status: 'normal', trend: 'stable', color: 'blue' },
-    { metric: 'Blood Sugar', value: '95 mg/dL', status: 'normal', trend: 'improving', color: 'green' },
-    { metric: 'Temperature', value: '98.6°F', status: 'normal', trend: 'stable', color: 'blue' }
-  ];
+  // Data arrays - will be populated from API calls
+  const recentPrescriptions = [];
+  const healthTips = [];
+  const vitalsTrends = [];
 
   // Filter doctors from schedules collection (all are available for booking)
   const getAvailableDoctors = () => {
@@ -963,7 +1214,82 @@ const PatientDashboard = () => {
     });
   };
 
-  // Function to submit appointment booking
+  // Function to immediately update local state after successful booking
+  const updateLocalStateAfterBooking = (bookedTimeSlot, doctorId) => {
+    try {
+      console.log('🔄 Updating local state after booking:', { bookedTimeSlot, doctorId });
+
+      // Update availableDoctors state
+      setAvailableDoctors(prevDoctors => 
+        prevDoctors.map(doctor => {
+          if (doctor.id === doctorId || doctor._id === doctorId) {
+            // Remove the booked slot from available times
+            const updatedAvailableTimes = doctor.availableTimes.filter(slot => slot !== bookedTimeSlot);
+            
+            // Update slotsWithStatus to mark the booked slot
+            const updatedSlotsWithStatus = doctor.slotsWithStatus.map(slot => {
+              if (slot.timeSlot === bookedTimeSlot) {
+                return { ...slot, status: 'booked' };
+              }
+              return slot;
+            });
+
+            // Update slot counts
+            const newAvailableSlotsCount = Math.max(0, (doctor.availableSlotsCount || 0) - 1);
+            const newBookedSlotsCount = (doctor.bookedSlotsCount || 0) + 1;
+
+            console.log('📊 Updated doctor state:', {
+              doctorName: doctor.name,
+              oldAvailableCount: doctor.availableSlotsCount,
+              newAvailableCount: newAvailableSlotsCount,
+              oldBookedCount: doctor.bookedSlotsCount,
+              newBookedCount: newBookedSlotsCount
+            });
+
+            return {
+              ...doctor,
+              availableTimes: updatedAvailableTimes,
+              slotsWithStatus: updatedSlotsWithStatus,
+              rawSlots: updatedSlotsWithStatus,
+              availableSlotsCount: newAvailableSlotsCount,
+              bookedSlotsCount: newBookedSlotsCount
+            };
+          }
+          return doctor;
+        })
+      );
+
+      // Update selectedDoctor if it matches
+      if (selectedDoctor && (selectedDoctor.id === doctorId || selectedDoctor._id === doctorId)) {
+        setSelectedDoctor(prevSelected => {
+          if (!prevSelected) return prevSelected;
+          
+          const updatedAvailableTimes = prevSelected.availableTimes.filter(slot => slot !== bookedTimeSlot);
+          const updatedSlotsWithStatus = prevSelected.slotsWithStatus.map(slot => {
+            if (slot.timeSlot === bookedTimeSlot) {
+              return { ...slot, status: 'booked' };
+            }
+            return slot;
+          });
+
+          return {
+            ...prevSelected,
+            availableTimes: updatedAvailableTimes,
+            slotsWithStatus: updatedSlotsWithStatus,
+            rawSlots: updatedSlotsWithStatus,
+            availableSlotsCount: Math.max(0, (prevSelected.availableSlotsCount || 0) - 1),
+            bookedSlotsCount: (prevSelected.bookedSlotsCount || 0) + 1
+          };
+        });
+      }
+
+      console.log('✅ Local state updated successfully');
+    } catch (error) {
+      console.error('❌ Error updating local state:', error);
+    }
+  };
+
+  // Function to submit appointment booking with payment
   const submitAppointmentBooking = async () => {
     if (!selectedDoctor || !appointmentData.time || !appointmentData.reason.trim()) {
       Swal.fire({
@@ -976,152 +1302,167 @@ const PatientDashboard = () => {
     }
 
     try {
-      const token = localStorage.getItem('token');
-      
+      // Get current user info
+      const currentUser = getCurrentUser();
+      const consultationFee = selectedDoctor.consultationFee || 50;
+
       // Format the date properly without timezone conversion
       const formatDateForServer = (date) => {
-        // Use the actual date values without timezone conversion
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
-        console.log('Formatting date:', {
-          originalDate: date,
-          dateString: date.toString(),
-          year, month, day,
-          formatted: `${year}-${month}-${day}`
-        });
         return `${year}-${month}-${day}`;
       };
       
-      const appointmentDate = formatDateForServer(selectedDate); // Format as YYYY-MM-DD without timezone issues
-      
-      // Extract start time from the time slot (e.g., "14:00-14:18" -> "14:00")
+      const appointmentDate = formatDateForServer(selectedDate);
       const timeSlot = appointmentData.time;
       const startTime = timeSlot.includes('-') ? timeSlot.split('-')[0] : timeSlot;
-      const endTime = timeSlot.includes('-') ? timeSlot.split('-')[1] : '';
-      
-        console.log('Booking appointment with data:', {
-          doctorId: selectedDoctor._id || selectedDoctor.id,
-          doctorName: selectedDoctor.name,
-          doctorIsActive: selectedDoctor.isActive,
-          selectedDoctor: selectedDoctor,
-          originalSelectedDate: selectedDate,
-          selectedDateString: selectedDate.toString(),
-          selectedDateISO: selectedDate.toISOString(),
-          selectedDateGetDate: selectedDate.getDate(),
-          selectedDateGetMonth: selectedDate.getMonth(),
-          selectedDateGetFullYear: selectedDate.getFullYear(),
-          formattedAppointmentDate: appointmentDate,
-          timeSlot: timeSlot,
-          startTime: startTime,
-          endTime: endTime,
-          time: startTime, // Send only start time to backend
-          reason: appointmentData.reason,
-          type: appointmentData.type,
-          today: new Date().toISOString().split('T')[0],
-          todayFormatted: formatDateForServer(new Date()),
-          isToday: appointmentDate === formatDateForServer(new Date())
-        });      const response = await fetch('http://localhost:3001/api/appointments/book', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          doctorId: selectedDoctor._id || selectedDoctor.id,
+
+      // Prepare payment data
+      const paymentData = {
+        amount: consultationFee,
+        doctorId: selectedDoctor._id || selectedDoctor.id,
+        doctorName: selectedDoctor.name,
+        patientId: currentUser?.id || '',
+        patientName: currentUser?.name || '',
+        patientEmail: currentUser?.email || '',
+        patientPhone: currentUser?.phone || '',
+        appointmentData: {
           date: appointmentDate,
-          time: startTime, // Send only the start time
-          timeSlot: timeSlot, // Also send the full time slot for reference
+          time: startTime,
+          timeSlot: timeSlot,
           reason: appointmentData.reason,
           type: appointmentData.type
-        })
-      });
+        }
+      };
 
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Close modal and reset form
-        setShowBookingModal(false);
-        setAppointmentData({
-          date: '',
-          time: '',
-          reason: '',
-          type: 'consultation'
-        });
-        
-        // Show success message
-        const timeSlot = appointmentData.time;
-        const displayTime = timeSlot.includes('-') ? timeSlot.replace('-', ' to ') : timeSlot;
-        
-        Swal.fire({
-          title: 'Appointment Booked Successfully!',
-          html: `
-            <div class="text-left space-y-3">
-              <div class="bg-green-50 p-3 rounded-lg border border-green-200">
-                <h4 class="font-semibold text-green-800 mb-2">Appointment Details:</h4>
-                <div class="space-y-1 text-sm text-green-700">
-                  <div><strong>Doctor:</strong> ${selectedDoctor.name}</div>
-                  <div><strong>Date:</strong> ${selectedDate.toLocaleDateString('en-US', { 
-                    weekday: 'long', 
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric' 
-                  })}</div>
-                  <div><strong>Time:</strong> ${displayTime}</div>
-                  <div><strong>Duration:</strong> ${selectedDoctor.slotDuration || 30} minutes</div>
-                  <div><strong>Type:</strong> ${appointmentData.type}</div>
-                </div>
-              </div>
-              <div class="text-sm text-gray-600">
-                <strong>Next Steps:</strong>
-                <ul class="list-disc list-inside mt-1 space-y-1">
-                  <li>You'll receive a confirmation notification</li>
-                  <li>Arrive 10 minutes early for your appointment</li>
-                  <li>Bring any relevant medical documents</li>
-                </ul>
+      console.log('Initiating payment for appointment:', paymentData);
+
+      // Show payment confirmation dialog
+      const paymentConfirm = await Swal.fire({
+        title: 'Confirm Payment',
+        html: `
+          <div class="text-left space-y-3">
+            <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+              <h4 class="font-semibold text-blue-800 mb-3">Appointment Details:</h4>
+              <div class="space-y-2 text-sm text-blue-700">
+                <div><strong>Doctor:</strong> ${selectedDoctor.name}</div>
+                <div><strong>Date:</strong> ${selectedDate.toLocaleDateString('en-US', { 
+                  weekday: 'long', 
+                  year: 'numeric', 
+                  month: 'long', 
+                  day: 'numeric' 
+                })}</div>
+                <div><strong>Time:</strong> ${timeSlot.includes('-') ? timeSlot.replace('-', ' to ') : timeSlot}</div>
+                <div><strong>Duration:</strong> ${selectedDoctor.slotDuration || 30} minutes</div>
+                <div><strong>Reason:</strong> ${appointmentData.reason}</div>
               </div>
             </div>
-          `,
-          icon: 'success',
-          confirmButtonColor: '#10b981',
-          confirmButtonText: 'Got it!'
-        });
-        
-        // Refresh appointments list and available doctors
-        await fetchScheduledAppointments();
-        await loadAvailableDoctors();
-        
-        // Refresh doctors and appointments for the selected date
-        await fetchDoctorsForDate(appointmentDate);
-        await fetchAppointmentsForDate(appointmentDate);
-        
-      } else {
-        const errorData = await response.json();
-        
-        console.log('Booking error response:', errorData);
-        console.log('Response status:', response.status);
-        console.log('Full response headers:', [...response.headers.entries()]);
-        
-        // Check if this is an offline doctor booking issue
-        if (errorData.message && errorData.message.includes('not available for same-day appointments while offline')) {
-          throw new Error('This doctor is currently offline and not accepting same-day appointments. Please try booking for a future date or contact the doctor directly.');
-        } else if (errorData.message && errorData.message.includes('not available on this day')) {
-          throw new Error('Doctor is not available on this day. Please select a different date.');
-        } else if (errorData.message && errorData.message.includes('not set up a schedule')) {
-          throw new Error('The doctor has not set up their schedule for this date yet. Please try a different date or contact the doctor directly.');
-        } else if (errorData.message && errorData.message.includes('not found')) {
-          throw new Error('Doctor not found. Please refresh the page and try again.');
-        } else if (errorData.message && errorData.message.includes('not a doctor')) {
-          throw new Error('Invalid doctor selection. Please refresh the page and try again.');
-        }
-        
-        throw new Error(errorData.message || 'Failed to book appointment');
+            <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+              <div class="flex justify-between items-center">
+                <span class="text-green-800 font-semibold">Consultation Fee:</span>
+                <span class="text-green-800 font-bold text-lg">₹${consultationFee}</span>
+              </div>
+            </div>
+            <p class="text-sm text-gray-600 mt-3">
+              Click "Proceed to Payment" to complete your appointment booking with secure Razorpay payment.
+            </p>
+          </div>
+        `,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonText: 'Proceed to Payment',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#10b981',
+        cancelButtonColor: '#6b7280'
+      });
+
+      if (!paymentConfirm.isConfirmed) {
+        return;
       }
+
+      // Show loading state for the selected slot
+      console.log('💳 Initiating payment process...');
+      setProcessingSlot(timeSlot);
+
+      // Initiate Razorpay payment
+      await paymentService.initiatePayment(
+        paymentData,
+        // Success callback
+        async (verificationResult) => {
+          console.log('Payment successful:', verificationResult);
+          
+          // Clear processing state
+          setProcessingSlot(null);
+          
+          // Immediately update local state to remove booked slot
+          updateLocalStateAfterBooking(timeSlot, selectedDoctor._id || selectedDoctor.id);
+          
+          // Close booking modal
+          setShowBookingModal(false);
+          setAppointmentData({
+            date: '',
+            time: '',
+            reason: '',
+            type: 'consultation'
+          });
+
+          // Show success message
+          await Swal.fire({
+            title: 'Payment Successful!',
+            html: `
+              <div class="text-left space-y-3">
+                <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+                  <h4 class="font-semibold text-green-800 mb-3">Appointment Booked Successfully!</h4>
+                  <div class="space-y-2 text-sm text-green-700">
+                    <div><strong>Appointment ID:</strong> ${verificationResult.appointment.id}</div>
+                    <div><strong>Payment ID:</strong> ${verificationResult.appointment.paymentId}</div>
+                    <div><strong>Status:</strong> Confirmed & Paid</div>
+                  </div>
+                </div>
+                <div class="text-sm text-gray-600">
+                  <strong>Next Steps:</strong>
+                  <ul class="list-disc list-inside mt-2 space-y-1">
+                    <li>You'll receive a confirmation notification</li>
+                    <li>Arrive 10 minutes early for your appointment</li>
+                    <li>Bring any relevant medical documents</li>
+                    <li>Payment receipt has been sent to your email</li>
+                  </ul>
+                </div>
+              </div>
+            `,
+            icon: 'success',
+            confirmButtonColor: '#10b981',
+            confirmButtonText: 'Got it!'
+          });
+
+          // Refresh appointments and doctors
+          await fetchScheduledAppointments();
+          await loadAvailableDoctors();
+          await fetchDoctorsForDate(appointmentDate);
+          await fetchAppointmentsForDate(appointmentDate);
+        },
+        // Failure callback
+        async (error) => {
+          console.error('Payment failed:', error);
+          
+          // Clear processing state
+          setProcessingSlot(null);
+          
+          await Swal.fire({
+            title: 'Payment Failed',
+            text: error.message || 'Payment was unsuccessful. Please try again.',
+            icon: 'error',
+            confirmButtonColor: '#ef4444'
+          });
+        }
+      );
+
     } catch (error) {
-      console.error('Error booking appointment:', error);
+      console.error('Error initiating payment:', error);
       Swal.fire({
-        title: 'Booking Failed',
-        text: error.message || 'Failed to book appointment. Please try again.',
+        title: 'Error',
+        text: error.message || 'Failed to initiate payment. Please try again.',
         icon: 'error',
         confirmButtonColor: '#ef4444'
       });
@@ -1376,87 +1717,168 @@ const PatientDashboard = () => {
     }
   };
 
+  // WebRTC and Video Call Helper Functions
+  const initializePeerConnection = () => {
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    peerConnectionRef.current = new RTCPeerConnection(configuration);
+
+    // Handle remote stream
+    peerConnectionRef.current.ontrack = (event) => {
+      console.log('📱 Patient received remote stream');
+      setRemoteStream(event.streams[0]);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    // Handle ICE candidates
+    peerConnectionRef.current.onicecandidate = (event) => {
+      if (event.candidate && socketRef.current) {
+        socketRef.current.send(JSON.stringify({
+          type: 'webrtc-ice-candidate',
+          candidate: event.candidate,
+          appointmentId: currentAppointment?._id
+        }));
+      }
+    };
+
+    return peerConnectionRef.current;
+  };
+
+  const getUserMedia = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+      
+      setLocalStream(stream);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+      
+      return stream;
+    } catch (error) {
+      console.error('📱 Error accessing media devices:', error);
+      Swal.fire({
+        title: 'Camera/Microphone Access Required',
+        text: 'Please allow access to your camera and microphone to join the video call.',
+        icon: 'warning',
+        confirmButtonText: 'OK'
+      });
+      throw error;
+    }
+  };
+
+  const handleCallAccepted = async (data) => {
+    console.log('📱 Patient: Call accepted by doctor');
+    setCallStatus('connected');
+    setShowVideoCallModal(true);
+    
+    // Start call timer
+    callStartTimeRef.current = Date.now();
+    callTimerRef.current = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
+      setCallDuration(elapsed);
+    }, 1000);
+
+    try {
+      // Get user media
+      const stream = await getUserMedia();
+      
+      // Initialize peer connection
+      const peerConnection = initializePeerConnection();
+      
+      // Add local stream to peer connection
+      stream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, stream);
+      });
+
+      Swal.fire({
+        title: 'Call Connected!',
+        text: 'Your video consultation has started.',
+        icon: 'success',
+        timer: 2000,
+        showConfirmButton: false
+      });
+
+    } catch (error) {
+      console.error('📱 Error setting up video call:', error);
+      setCallStatus('idle');
+      setShowVideoCallModal(false);
+    }
+  };
+
+  const handleCallDeclined = (data) => {
+    console.log('📱 Patient: Call declined by doctor');
+    setCallStatus('idle');
+    Swal.fire({
+      title: 'Call Declined',
+      text: 'The doctor is not available for the video call right now. Please try again later.',
+      icon: 'info',
+      confirmButtonText: 'OK'
+    });
+  };
+
+  const handleCallEnded = (data) => {
+    console.log('📱 Patient: Call ended');
+    endCall();
+  };
+
+  const handleWebRTCMessage = async (data) => {
+    if (!peerConnectionRef.current) return;
+
+    try {
+      switch (data.type) {
+        case 'webrtc-offer':
+          await peerConnectionRef.current.setRemoteDescription(data.offer);
+          const answer = await peerConnectionRef.current.createAnswer();
+          await peerConnectionRef.current.setLocalDescription(answer);
+          
+          if (socketRef.current) {
+            socketRef.current.send(JSON.stringify({
+              type: 'webrtc-answer',
+              answer: answer,
+              appointmentId: currentAppointment?._id
+            }));
+          }
+          break;
+
+        case 'webrtc-answer':
+          await peerConnectionRef.current.setRemoteDescription(data.answer);
+          break;
+
+        case 'webrtc-ice-candidate':
+          await peerConnectionRef.current.addIceCandidate(data.candidate);
+          break;
+      }
+    } catch (error) {
+      console.error('📱 Error handling WebRTC message:', error);
+    }
+  };
+
+
+
   // Appointment action handlers for "Your Upcoming Appointments" section
   const handleJoinCall = async (appointment) => {
-    const isVideoCall = (appointment.type === 'Video Call' || appointment.isOnline);
-    
-    if (!isVideoCall) {
+    // This function is kept for compatibility but now uses the new video call system
+    if (availableCall && availableCall.appointmentId === appointment.id) {
+      joinCall();
+    } else {
       Swal.fire({
-        title: 'Not Available',
-        text: 'This appointment is not a video call. Please visit the medical center for your in-person appointment.',
-        icon: 'info',
-        confirmButtonText: 'Got it',
-        confirmButtonColor: '#3b82f6'
-      });
-      return;
-    }
-
-    if (appointment.status !== 'confirmed') {
-      Swal.fire({
-        title: 'Call Not Available',
-        text: 'Video call is only available for confirmed appointments.',
-        icon: 'warning',
-        confirmButtonText: 'OK',
-        confirmButtonColor: '#f59e0b'
-      });
-      return;
-    }
-
-    // Check if appointment is today or within call window
-    const appointmentDate = new Date(appointment.date);
-    const now = new Date();
-    const diffHours = (appointmentDate - now) / (1000 * 60 * 60);
-
-    if (diffHours > 0.5) { // More than 30 minutes early
-      Swal.fire({
-        title: 'Too Early',
-        text: 'Video call will be available 30 minutes before your appointment time.',
+        title: 'Call Not Ready',
+        text: 'Please wait for the doctor to start the video call first.',
         icon: 'info',
         confirmButtonText: 'OK',
         confirmButtonColor: '#3b82f6'
       });
-      return;
     }
-
-    if (diffHours < -2) { // More than 2 hours late
-      Swal.fire({
-        title: 'Call Expired',
-        text: 'This video call session has expired. Please contact your doctor to reschedule.',
-        icon: 'warning',
-        confirmButtonText: 'OK',
-        confirmButtonColor: '#f59e0b'
-      });
-      return;
-    }
-
-    // Show joining modal
-    Swal.fire({
-      title: 'Joining Video Call',
-      html: `
-        <div class="text-center">
-          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p class="text-gray-700 mb-2">Connecting you to your appointment with</p>
-          <p class="font-semibold text-gray-900">${appointment.doctor}</p>
-          <p class="text-sm text-gray-500 mt-2">Please wait while we establish the connection...</p>
-        </div>
-      `,
-      allowOutsideClick: false,
-      showConfirmButton: false,
-      timer: 3000
-    });
-
-    // TODO: Integrate with actual video calling service
-    setTimeout(() => {
-      Swal.fire({
-        title: 'Video Call Ready!',
-        text: 'Your video call session is ready. You would normally be redirected to the video platform now.',
-        icon: 'success',
-        confirmButtonText: 'Join Now',
-        confirmButtonColor: '#10b981'
-      });
-    }, 3000);
-
-    console.log('Joining video call for appointment:', appointment._id);
   };
 
   const handleRescheduleAppointment = async (appointment) => {
@@ -1747,7 +2169,6 @@ const PatientDashboard = () => {
     { id: 'my-schedules', label: 'My Schedules', icon: ClockIcon, gradient: 'from-orange-500 to-orange-600' },
     { id: 'prescriptions', label: 'E-Prescriptions', icon: DocumentTextIcon, gradient: 'from-pink-500 to-rose-600' },
     { id: 'medical-history', label: 'Medical History', icon: ChartBarIcon, gradient: 'from-indigo-500 to-indigo-600' },
-    { id: 'chat', label: 'Chat', icon: ChatBubbleLeftIcon, gradient: 'from-cyan-500 to-cyan-600' }
   ];
 
   const sendChatMessage = () => {
@@ -1980,15 +2401,38 @@ const PatientDashboard = () => {
                               </div>
                             </div>
 
+                            {/* Video Call Ready Notification */}
+                            {availableCall && availableCall.appointmentId === appointment.id && (
+                              <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+                                <div className="flex items-center text-green-800">
+                                  <svg className="w-5 h-5 mr-2 animate-bounce" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                  </svg>
+                                  <div className="text-sm">
+                                    <p className="font-medium">Doctor is ready for your video call!</p>
+                                    <p className="text-xs mt-1">Click "Join Call Now" and allow camera/microphone access when prompted.</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
                             {/* Action Buttons */}
                             <div className="flex flex-wrap gap-2">
                               {isUpcoming && (
                                 <Button 
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
-                                  onClick={() => handleJoinCall(appointment)}
+                                  className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                                    availableCall && availableCall.appointmentId === appointment.id
+                                      ? 'bg-green-600 hover:bg-green-700 text-white animate-pulse'
+                                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                  }`}
+                                  onClick={() => joinCall()}
+                                  disabled={!availableCall || availableCall.appointmentId !== appointment.id}
                                 >
                                   <VideoCameraIcon className="w-4 h-4 mr-1" />
-                                  Join Call
+                                  {availableCall && availableCall.appointmentId === appointment.id 
+                                    ? 'Join Call Now!' 
+                                    : 'Join Call'
+                                  }
                                 </Button>
                               )}
                               
@@ -2370,11 +2814,19 @@ const PatientDashboard = () => {
                             {/* Compact Action Buttons */}
                             <div className="flex flex-wrap gap-2">
                               <Button 
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
-                                onClick={() => handleJoinCall(appointment)}
+                                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                                  availableCall && availableCall.appointmentId === appointment.id
+                                    ? 'bg-green-600 hover:bg-green-700 text-white animate-pulse'
+                                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                }`}
+                                onClick={() => joinCall()}
+                                disabled={!availableCall || availableCall.appointmentId !== appointment.id}
                               >
                                 <VideoCameraIcon className="w-4 h-4 mr-1" />
-                                Join Call
+                                {availableCall && availableCall.appointmentId === appointment.id 
+                                  ? 'Join Call Now!' 
+                                  : 'Join Call'
+                                }
                               </Button>
                               
                               <Button 
@@ -2422,25 +2874,7 @@ const PatientDashboard = () => {
                     </h2>
                     <p className="text-blue-100 mt-2">Book, manage, and track your healthcare appointments</p>
                   </div>
-                  <Button 
-                    className="bg-white text-blue-600 hover:bg-blue-50 shadow-md hover:shadow-lg transition-all duration-300 font-semibold px-6 py-3"
-                    onClick={() => {
-                      const availableDocs = availableDoctors.filter(doctor => !isScheduleTimeExpired(doctor));
-                      if (availableDocs.length > 0) {
-                        handleBookAppointment(availableDocs[0]);
-                      } else {
-                        Swal.fire({
-                          title: 'No Doctors Available',
-                          text: 'No doctors are currently available or all schedules have ended. Please check back later.',
-                          icon: 'info',
-                          confirmButtonColor: '#3b82f6'
-                        });
-                      }
-                    }}
-                  >
-                    <PlusIcon className="w-5 h-5 mr-2" />
-                    Book New Appointment
-                  </Button>
+                  
                 </div>
               </div>
               {/* Decorative elements */}
@@ -3554,15 +3988,34 @@ const PatientDashboard = () => {
                               <div className="flex items-center justify-between pt-3 border-t border-gray-100">
                                 <div className="flex space-x-2">
                                   <button 
-                                    onClick={() => handleJoinCall(appointment)}
+                                    onClick={() => joinCall()}
+                                    disabled={!availableCall || availableCall.appointmentId !== appointment.id}
                                     className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-lg transition-colors duration-200 ${
-                                      (appointment.type === 'Video Call' || appointment.isOnline) && appointment.status === 'confirmed'
-                                        ? 'bg-blue-600 text-white hover:bg-blue-700'
-                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                      availableCall && availableCall.appointmentId === appointment.id
+                                        ? 'bg-green-600 text-white hover:bg-green-700 animate-pulse'
+                                        : callStatus === 'connected' && availableCall?.appointmentId === appointment.id
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                                     }`}
+                                    title={
+                                      availableCall && availableCall.appointmentId === appointment.id
+                                        ? 'Doctor is calling - Click to join!'
+                                        : callStatus === 'connected'
+                                        ? 'Call in progress'
+                                        : 'Waiting for doctor to start call'
+                                    }
                                   >
-                                    <VideoCameraIcon className="w-4 h-4 mr-1" />
-                                    Join Call
+                                    {callStatus === 'connected' && availableCall?.appointmentId === appointment.id ? (
+                                      <PhoneIcon className="w-4 h-4 mr-1" />
+                                    ) : (
+                                      <VideoCameraIcon className="w-4 h-4 mr-1" />
+                                    )}
+                                    {availableCall && availableCall.appointmentId === appointment.id && callStatus !== 'connected' 
+                                      ? 'Join Call Now!' 
+                                      : callStatus === 'connected' && availableCall?.appointmentId === appointment.id
+                                      ? 'In Call'
+                                      : 'Join Call'
+                                    }
                                   </button>
                                   <button 
                                     onClick={() => handleViewDetails(appointment)}
@@ -4290,12 +4743,9 @@ const PatientDashboard = () => {
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 transform animate-in fade-in zoom-in duration-300">
             {/* Header */}
             <div className="text-center mb-6">
-              <div className={`w-16 h-16 bg-gradient-to-r ${selectedDoctor.color} rounded-full flex items-center justify-center mx-auto mb-4`}>
-                <UserIcon className="w-8 h-8 text-white" />
-              </div>
+              
               <h3 className="text-xl font-bold text-gray-900 mb-2">Book Appointment</h3>
               <p className="text-gray-600">Schedule your visit with {selectedDoctor.name}</p>
-              <p className="text-sm text-gray-500">{selectedDoctor.specialty}</p>
               
               {/* Selected Date Display */}
               <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
@@ -4353,26 +4803,52 @@ const PatientDashboard = () => {
                       const [startTime, endTime] = timeSlot.includes('-') ? timeSlot.split('-') : [timeSlot, ''];
                       const displayTime = endTime ? `${startTime} - ${endTime}` : startTime;
                       
+                      const isProcessing = processingSlot === timeSlot;
+                      const isBooked = selectedDoctor.slotsWithStatus && 
+                        selectedDoctor.slotsWithStatus.find(slot => slot.timeSlot === timeSlot && slot.status === 'booked');
+                      
                       return (
                         <button
                           key={index}
                           type="button"
+                          disabled={isProcessing || isBooked}
                           onClick={() => setAppointmentData({...appointmentData, time: timeSlot})}
                           className={`p-3 text-sm rounded-lg border transition-all duration-200 ${
-                            appointmentData.time === timeSlot
+                            isProcessing 
+                              ? 'bg-yellow-100 text-yellow-700 border-yellow-300 cursor-not-allowed animate-pulse'
+                              : isBooked
+                              ? 'bg-red-100 text-red-700 border-red-300 cursor-not-allowed opacity-50'
+                              : appointmentData.time === timeSlot
                               ? 'bg-blue-500 text-white border-blue-500 shadow-md ring-2 ring-blue-200'
                               : 'bg-white text-gray-700 border-gray-300 hover:border-blue-300 hover:bg-blue-50'
                           }`}
                         >
                           <div className="flex flex-col items-center gap-1">
                             <div className="flex items-center gap-1">
-                              <ClockIcon className="h-3 w-3" />
-                              <span className="font-medium">{startTime}</span>
+                              {isProcessing ? (
+                                <>
+                                  <div className="h-3 w-3 border-2 border-yellow-600 border-t-transparent rounded-full animate-spin"></div>
+                                  <span className="font-medium">{startTime}</span>
+                                </>
+                              ) : isBooked ? (
+                                <>
+                                  <XMarkIcon className="h-3 w-3" />
+                                  <span className="font-medium line-through">{startTime}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <ClockIcon className="h-3 w-3" />
+                                  <span className="font-medium">{startTime}</span>
+                                </>
+                              )}
                             </div>
-                            {endTime && (
+                            {endTime && !isBooked && (
                               <span className="text-xs opacity-75">
-                                {selectedDoctor.slotDuration || 30} min
+                                {isProcessing ? 'Processing...' : `${selectedDoctor.slotDuration || 30} min`}
                               </span>
+                            )}
+                            {isBooked && (
+                              <span className="text-xs opacity-75">Booked</span>
                             )}
                           </div>
                         </button>
@@ -4423,6 +4899,26 @@ const PatientDashboard = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
                 />
               </div>
+
+              {/* Consultation Fee Display */}
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-semibold text-green-800">Consultation Fee</h4>
+                    <p className="text-xs text-green-600 mt-1">Secure payment via Razorpay</p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold text-green-700">₹{selectedDoctor.consultationFee || 50}</div>
+                    <div className="text-xs text-green-600">inclusive of taxes</div>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center text-xs text-green-700">
+                  <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  100% secure payment • Instant confirmation • Refund available
+                </div>
+              </div>
             </div>
             
             
@@ -4456,7 +4952,7 @@ const PatientDashboard = () => {
               >
                 {!appointmentData.time ? 'Select Time Slot' : 
                  !appointmentData.reason.trim() ? 'Add Reason' : 
-                 'Book Appointment'}
+                 `Pay ₹${selectedDoctor.consultationFee || 50} & Book`}
               </Button>
             </div>
             
@@ -4486,6 +4982,113 @@ const PatientDashboard = () => {
         pauseOnHover
         theme="light"
       />
+
+      {/* Video Call Modal */}
+      {showVideoCallModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl w-full h-full max-w-6xl max-h-4xl mx-4 my-4 overflow-hidden">
+            {/* Video Call Header */}
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-bold">Video Consultation</h3>
+                <p className="text-blue-100">
+                  {callStatus === 'connected' ? `Duration: ${formatCallDuration(callDuration)}` : 'Connecting...'}
+                </p>
+              </div>
+              <div className="text-blue-100 text-sm">
+                Patient: {user?.firstName} {user?.lastName}
+              </div>
+            </div>
+
+            {/* Video Container */}
+            <div className="relative h-96 bg-gray-900">
+              {/* Remote Video (Doctor) - Main view */}
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover"
+              />
+              
+              {/* Local Video (Patient) - Picture in Picture */}
+              <div className="absolute top-4 right-4 w-48 h-36 bg-gray-800 rounded-lg overflow-hidden border-2 border-white shadow-lg">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+                {!isVideoEnabled && (
+                  <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
+                    <VideoCameraSlashIcon className="w-8 h-8 text-white" />
+                  </div>
+                )}
+              </div>
+
+              {/* Connection Status Overlay */}
+              {callStatus !== 'connected' && (
+                <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
+                  <div className="text-center text-white">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+                    <p className="text-lg">
+                      {callStatus === 'ringing' ? 'Joining call...' : 'Connecting...'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Video Controls */}
+            <div className="bg-gray-50 p-4">
+              <div className="flex justify-center space-x-4">
+                {/* Video Toggle */}
+                <button
+                  onClick={toggleVideo}
+                  className={`p-3 rounded-full ${
+                    isVideoEnabled
+                      ? 'bg-gray-600 hover:bg-gray-700 text-white'
+                      : 'bg-red-500 hover:bg-red-600 text-white'
+                  } transition-colors`}
+                  title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
+                >
+                  {isVideoEnabled ? (
+                    <VideoCameraIcon className="w-6 h-6" />
+                  ) : (
+                    <VideoCameraSlashIcon className="w-6 h-6" />
+                  )}
+                </button>
+
+                {/* Audio Toggle */}
+                <button
+                  onClick={toggleAudio}
+                  className={`p-3 rounded-full ${
+                    isAudioEnabled
+                      ? 'bg-gray-600 hover:bg-gray-700 text-white'
+                      : 'bg-red-500 hover:bg-red-600 text-white'
+                  } transition-colors`}
+                  title={isAudioEnabled ? 'Mute microphone' : 'Unmute microphone'}
+                >
+                  {isAudioEnabled ? (
+                    <MicrophoneIcon className="w-6 h-6" />
+                  ) : (
+                    <SpeakerXMarkIcon className="w-6 h-6" />
+                  )}
+                </button>
+
+                {/* End Call */}
+                <button
+                  onClick={endCall}
+                  className="p-3 rounded-full bg-red-500 hover:bg-red-600 text-white transition-colors"
+                  title="End call"
+                >
+                  <PhoneIcon className="w-6 h-6 transform rotate-135" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -89,56 +89,9 @@ const AdminDashboard = () => {
   const [approvalsLoading, setApprovalsLoading] = useState(false);
   const [approvalFilter, setApprovalFilter] = useState('all');
 
-  // Mock data
-  const notifications = [
-    {
-      id: 1,
-      title: "New Doctor Registration",
-      message: "Dr. Sarah Johnson has submitted verification documents",
-      time: "2 minutes ago",
-      type: "info",
-      unread: true
-    },
-    {
-      id: 2,
-      title: "System Maintenance",
-      message: "Scheduled maintenance tonight at 2:00 AM",
-      time: "1 hour ago",
-      type: "warning",
-      unread: true
-    },
-    {
-      id: 3,
-      title: "User Report",
-      message: "Weekly user activity report is ready",
-      time: "3 hours ago",
-      type: "success",
-      unread: false
-    }
-  ];
-
-  const recentUsers = [
-    {
-      id: 1,
-      name: "John Smith",
-      email: "john@example.com",
-      type: "Patient",
-      status: "Active",
-      registeredDate: "2024-01-15",
-      lastLogin: "2 hours ago",
-      avatar: "👨‍💼"
-    },
-    {
-      id: 2,
-      name: "Dr. Sarah Wilson",
-      email: "sarah@example.com",
-      type: "Doctor",
-      status: "Pending",
-      registeredDate: "2024-01-14",
-      lastLogin: "1 day ago",
-      avatar: "👩‍⚕️"
-    }
-  ];
+  // Data arrays - will be populated from API calls
+  const notifications = [];
+  const recentUsers = [];
 
   const sidebarItems = [
     { id: 'overview', label: 'Dashboard', icon: HomeIcon, gradient: 'from-blue-500 to-purple-600' },
@@ -201,26 +154,14 @@ const AdminDashboard = () => {
           return;
         }
 
-        // For demo purposes, create mock admin data if none exists or if role is missing
-        let adminData = userData;
-        if (!adminData.role || adminData.role !== 'admin') {
-          adminData = {
-            ...userData,
-            id: 'admin-001',
-            name: 'Admin User',
-            firstName: 'Admin',
-            lastName: 'User',
-            email: 'admin@healthcareplus.com',
-            role: 'admin',
-            avatar: '👨‍💼'
-          };
-          
-          // Update localStorage with role
-          localStorage.setItem('user', JSON.stringify(adminData));
-          localStorage.setItem('token', 'demo-admin-token-123');
+        // Check if user has proper admin role
+        if (!userData.role || userData.role !== 'admin') {
+          console.error('User is not an admin or role is missing');
+          navigate('/auth/signin');
+          return;
         }
         
-        setUser(adminData);
+        setUser(userData);
         setIsLoading(false);
         
         // Fetch pending doctors and users after authentication

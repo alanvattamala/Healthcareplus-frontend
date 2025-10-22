@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Swal from 'sweetalert2';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { Card, Button, Modal, Calendar } from '../../components';
 import { handleLogout, getCurrentUser, requireRole, checkAuthAndRedirect } from '../../utils/auth';
+import VideoCallManager from '../../utils/videoCallManager';
 import {
   BellIcon,
   UserIcon,
@@ -38,7 +41,17 @@ import {
   VideoCameraIcon,
   BuildingOfficeIcon,
   PencilIcon,
-  UserGroupIcon
+  UserGroupIcon,
+  ArrowPathIcon,
+  EyeIcon,
+  PhoneIcon,
+  MicrophoneIcon,
+  VideoCameraSlashIcon,
+  SpeakerWaveIcon,
+  SpeakerXMarkIcon,
+  MagnifyingGlassIcon,
+  StarIcon,
+  ArrowDownIcon
 } from '@heroicons/react/24/outline';
 
 const DoctorDashboard = () => {
@@ -138,6 +151,30 @@ const DoctorDashboard = () => {
     message: '',
     source: '' // 'schedule' or 'availability'
   });
+
+  // Appointment modal states
+  const [showAppointmentDetailsModal, setShowAppointmentDetailsModal] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState(null);
+  const [updatingAppointmentStatus, setUpdatingAppointmentStatus] = useState(false);
+
+  // Video consultation states
+  const [showVideoCallModal, setShowVideoCallModal] = useState(false);
+  const [callRoom, setCallRoom] = useState(null);
+  const [callStatus, setCallStatus] = useState('idle'); // 'idle', 'initiating', 'waiting', 'ringing', 'connected', 'ended'
+  const [incomingCallRequests, setIncomingCallRequests] = useState([]);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [callDuration, setCallDuration] = useState(0);
+  const [showCallControls, setShowCallControls] = useState(true);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const callStartTimeRef = useRef(null);
+  const callTimerRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const socketRef = useRef(null);
+  const videoCallManagerRef = useRef(null);
 
   // Upcoming Schedules Management State
   const [selectedDates, setSelectedDates] = useState([]);
@@ -318,12 +355,16 @@ const DoctorDashboard = () => {
         throw new Error('User not authenticated');
       }
 
-      const dateString = date.toISOString().split('T')[0]; // Format: YYYY-MM-DD
-      const apiUrl = `http://localhost:3000/api/appointments/doctor-appointments?date=${dateString}`;
+      // Fix timezone issue by using local date string
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const dateString = `${year}-${month}-${day}`; // Format: YYYY-MM-DD
+      
+      const apiUrl = `http://localhost:3001/api/appointments/doctor-appointments?date=${dateString}`;
       const token = localStorage.getItem('token');
       
       console.log('📅 Fetching appointments for date:', dateString);
-      console.log('📅 Is today (2025-10-15):', dateString === '2025-10-15');
       console.log('🌐 API URL:', apiUrl);
       console.log('🔑 Token exists:', !!token);
       console.log('🔑 Token preview:', token ? `${token.substring(0, 20)}...` : 'No token');
@@ -373,12 +414,7 @@ const DoctorDashboard = () => {
       
       // Transform the appointment data to match our component structure
       const transformedAppointments = result.data?.map(appointment => {
-        console.log('🔄 Transforming individual appointment:', {
-          id: appointment._id,
-          rawPatient: appointment.patient,
-          patientType: typeof appointment.patient,
-          patientKeys: appointment.patient ? Object.keys(appointment.patient) : 'null'
-        });
+        console.log('🔄 Processing appointment:', appointment._id, 'for date:', appointment.date);
         
         // Extract patient information - could be populated object or just ID
         let patientName = 'Unknown Patient';
@@ -430,14 +466,36 @@ const DoctorDashboard = () => {
       }) || [];
 
       console.log('🔄 Transformed appointments:', transformedAppointments);
-      setAppointments(transformedAppointments);
+      
+      // Filter appointments to only show those for the selected date
+      const filteredAppointments = transformedAppointments.filter(appointment => {
+        const appointmentDate = new Date(appointment.appointmentDate);
+        const appointmentYear = appointmentDate.getFullYear();
+        const appointmentMonth = String(appointmentDate.getMonth() + 1).padStart(2, '0');
+        const appointmentDay = String(appointmentDate.getDate()).padStart(2, '0');
+        const appointmentDateString = `${appointmentYear}-${appointmentMonth}-${appointmentDay}`;
+        
+        const matches = appointmentDateString === dateString;
+        console.log('🔍 Date filter check:', {
+          appointmentId: appointment.id,
+          appointmentRawDate: appointment.appointmentDate,
+          appointmentParsedDate: appointmentDate,
+          appointmentDateString: appointmentDateString,
+          requestedDate: dateString,
+          matches: matches
+        });
+        return matches;
+      });
+      
+      console.log('✅ Filtered appointments for selected date:', filteredAppointments);
+      setAppointments(filteredAppointments);
 
-      // Calculate stats
+      // Calculate stats based on filtered appointments
       const stats = {
-        total: transformedAppointments.length,
-        completed: transformedAppointments.filter(apt => apt.status === 'completed').length,
-        pending: transformedAppointments.filter(apt => apt.status === 'scheduled' || apt.status === 'confirmed').length,
-        noShow: transformedAppointments.filter(apt => apt.status === 'no-show').length
+        total: filteredAppointments.length,
+        completed: filteredAppointments.filter(apt => apt.status === 'completed').length,
+        pending: filteredAppointments.filter(apt => apt.status === 'scheduled' || apt.status === 'confirmed').length,
+        noShow: filteredAppointments.filter(apt => apt.status === 'no-show').length
       };
       console.log('📊 Calculated stats:', stats);
       setAppointmentStats(stats);
@@ -450,7 +508,7 @@ const DoctorDashboard = () => {
         name: error.name
       });
       
-      // Show user-friendly error message but don't fall back to dummy data
+      // Clear appointments on error
       setAppointments([]);
       setAppointmentStats({
         total: 0,
@@ -458,9 +516,6 @@ const DoctorDashboard = () => {
         pending: 0,
         noShow: 0
       });
-      
-      // You can add a toast notification here if you have one set up
-      // toast.error('Failed to load appointments. Please try again.');
     } finally {
       setLoadingAppointments(false);
     }
@@ -474,46 +529,12 @@ const DoctorDashboard = () => {
         return;
       }
 
-      // Get first and last day of the month
-      const firstDay = new Date(year, month, 1);
-      const lastDay = new Date(year, month + 1, 0);
+      console.log(`📅 Fetching monthly appointments for ${year}-${month + 1} (reduced API calls)`);
       
-      const startDate = firstDay.toISOString().split('T')[0];
-      const endDate = lastDay.toISOString().split('T')[0];
-      
-      console.log(`📅 Fetching monthly appointments from ${startDate} to ${endDate}`);
-
-      // Fetch appointments for each day of the month
-      const appointments = {};
-      const promises = [];
-
-      for (let day = 1; day <= lastDay.getDate(); day++) {
-        const currentDate = new Date(year, month, day);
-        const dateString = currentDate.toISOString().split('T')[0];
-        
-        const promise = fetch(`http://localhost:3000/api/appointments/doctor-appointments?date=${dateString}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          }
-        })
-        .then(response => response.ok ? response.json() : null)
-        .then(result => {
-          if (result && result.data && result.data.length > 0) {
-            appointments[dateString] = result.data.length;
-          }
-        })
-        .catch(error => {
-          console.log(`No appointments for ${dateString}`);
-        });
-
-        promises.push(promise);
-      }
-
-      await Promise.all(promises);
-      setAppointmentsByDate(appointments);
-      console.log('📊 Monthly appointments loaded:', appointments);
+      // We'll disable monthly fetching for now to prevent excessive API calls
+      // and only fetch appointments when a specific date is selected
+      setAppointmentsByDate({});
+      console.log('📊 Monthly fetch disabled to prevent server overload');
 
     } catch (error) {
       console.error('❌ Error fetching monthly appointments:', error);
@@ -758,33 +779,8 @@ const DoctorDashboard = () => {
     );
   };
 
-  // Mock notifications data
-  const notifications = [
-    {
-      id: 1,
-      title: 'New Patient Registration',
-      message: 'Sarah Johnson has registered and requested an appointment',
-      time: '5 minutes ago',
-      type: 'patient',
-      unread: true
-    },
-    {
-      id: 2,
-      title: 'Appointment Reminder',
-      message: 'Video consultation with Michael Chen in 30 minutes',
-      time: '25 minutes ago',
-      type: 'appointment',
-      unread: true
-    },
-    {
-      id: 3,
-      title: 'Prescription Refill Request',
-      message: 'Emily Davis requested refill for Lisinopril',
-      time: '1 hour ago',
-      type: 'prescription',
-      unread: false
-    }
-  ];
+  // Notifications data - will be populated from API calls
+  const notifications = [];
 
   const unreadCount = notifications.filter(notification => notification.unread).length;
 
@@ -2071,6 +2067,188 @@ const DoctorDashboard = () => {
     setShowGoOnlineModal(false);
   };
 
+  // Appointment action handlers
+  const handleViewAppointmentDetails = (appointment) => {
+    setSelectedAppointment(appointment);
+    setShowAppointmentDetailsModal(true);
+  };
+
+  const handleMarkComplete = async (appointment) => {
+    try {
+      setUpdatingAppointmentStatus(true);
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch(`http://localhost:3001/api/appointments/${appointment.id}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: 'completed' })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update appointment status');
+      }
+
+      // Refresh appointments to show updated status
+      await fetchAppointments(selectedDate);
+      
+      Swal.fire({
+        title: 'Appointment Completed!',
+        text: 'The appointment has been marked as completed.',
+        icon: 'success',
+        confirmButtonColor: '#10b981',
+        timer: 2000,
+        showConfirmButton: false
+      });
+      
+    } catch (error) {
+      console.error('Error updating appointment status:', error);
+      Swal.fire({
+        title: 'Error',
+        text: 'Failed to update appointment status. Please try again.',
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
+    } finally {
+      setUpdatingAppointmentStatus(false);
+    }
+  };
+
+  // Video consultation handlers
+  const initializeSocket = () => {
+    // Socket is already initialized in useEffect, just ensure it's connected
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      console.log('⚠️ WebSocket not ready for video call');
+      return false;
+    }
+    return true;
+  };
+
+
+
+  const startVideoCall = async (appointment) => {
+    try {
+      setSelectedAppointment(appointment);
+      setCallStatus('initiating');
+      setShowVideoCallModal(true);
+
+      // Check if video call manager is available
+      if (!videoCallManagerRef.current || !videoCallManagerRef.current.isSocketConnected()) {
+        throw new Error('Video call service not available');
+      }
+
+      // Debug: Log appointment details
+      console.log('📞 Initiating call for appointment:', appointment);
+      console.log('📞 Full appointment object:', JSON.stringify(appointment, null, 2));
+      console.log('📞 Patient ID fields check:');
+      console.log('  - appointment.patientId:', appointment.patientId);
+      console.log('  - appointment.patient?.id:', appointment.patient?.id);
+      console.log('  - appointment.patient:', appointment.patient);
+      console.log('  - appointment.userId:', appointment.userId);
+      console.log('  - appointment.id:', appointment.id);
+      
+      // Determine patient ID from various possible fields
+      const patientId = appointment.patientId || appointment.patient?.id || appointment.patient || appointment.userId || '12345';
+      
+      if (!patientId) {
+        throw new Error('Patient ID not found in appointment data');
+      }
+      
+      // Initiate call through VideoCallManager
+      await videoCallManagerRef.current.initiateCall(
+        appointment.id,
+        patientId,
+        getCurrentUser().id,
+        getCurrentUser().name || getCurrentUser().firstName + ' ' + getCurrentUser().lastName || 'Doctor'
+      );
+
+      setCallStatus('waiting');
+
+      Swal.fire({
+        title: 'Video Call Initiated',
+        text: 'Patient has been notified. Waiting for them to join...',
+        icon: 'info',
+        confirmButtonColor: '#10b981',
+        timer: 3000,
+        showConfirmButton: false
+      });
+
+    } catch (error) {
+      console.error('Error starting video call:', error);
+      Swal.fire({
+        title: 'Error',
+        text: error.message || 'Failed to start video call. Please check your camera and microphone permissions.',
+        icon: 'error',
+        confirmButtonColor: '#ef4444'
+      });
+      setCallStatus('idle');
+      setShowVideoCallModal(false);
+    }
+  };
+
+
+
+
+
+
+
+  const toggleVideo = () => {
+    if (videoCallManagerRef.current) {
+      const enabled = videoCallManagerRef.current.toggleVideo();
+      setIsVideoEnabled(enabled);
+    }
+  };
+
+  const toggleAudio = () => {
+    if (videoCallManagerRef.current) {
+      const enabled = videoCallManagerRef.current.toggleAudio();
+      setIsAudioEnabled(enabled);
+    }
+  };
+
+  const endCall = () => {
+    if (videoCallManagerRef.current) {
+      videoCallManagerRef.current.endCall();
+    }
+    
+    // Stop call timer
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+
+
+
+    // Reset states
+    setCallStatus('ended');
+    setRemoteStream(null);
+    setCallDuration(0);
+    setCallRoom(null);
+    
+    // Show call summary
+    setTimeout(() => {
+      setShowVideoCallModal(false);
+      setCallStatus('idle');
+      
+      Swal.fire({
+        title: 'Call Ended',
+        text: 'The consultation has been completed.',
+        icon: 'success',
+        confirmButtonColor: '#10b981'
+      });
+    }, 2000);
+  };
+
+
+
+  const formatCallDuration = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+  };
+
   // Check authentication and role on component mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -2311,27 +2489,14 @@ const DoctorDashboard = () => {
             // Fallback to localStorage data if API fails
             console.log('⚠️ API failed, using localStorage data');
             
-            // For demo purposes, create mock doctor data if none exists or if role is missing
-            let doctorData = userData;
-            if (!doctorData.role) {
-              doctorData = {
-                ...userData,
-                id: '12345',
-                firstName: 'Dr. Sarah',
-                lastName: 'Wilson',
-                name: 'Dr. Sarah Wilson',
-                email: 'dr.sarah@healthcareplus.com',
-                role: 'doctor',
-                specialization: 'General Medicine',
-                verificationStatus: 'verified' // Default for demo
-              };
-              
-              // Update localStorage with role
-              localStorage.setItem('user', JSON.stringify(doctorData));
-              localStorage.setItem('token', 'demo-doctor-token-123');
+            // Check if user has proper doctor role
+            if (!userData.role || userData.role !== 'doctor') {
+              console.error('User is not a doctor or role is missing');
+              navigate('/auth/signin');
+              return;
             }
             
-            setUser(doctorData);
+            setUser(userData);
           }
         } catch (apiError) {
           console.error('API request failed:', apiError);
@@ -2349,6 +2514,97 @@ const DoctorDashboard = () => {
 
     checkAuth();
   }, [navigate]);
+
+
+
+  // Initialize video call manager
+  useEffect(() => {
+    if (user && user.userType === 'doctor') {
+      videoCallManagerRef.current = new VideoCallManager();
+      
+      // Connect to video call server
+      videoCallManagerRef.current.connect(user.id, 'doctor');
+      
+      // Set up callbacks
+      videoCallManagerRef.current.setCallbacks({
+        onLocalStreamReceived: (stream) => {
+          setLocalStream(stream);
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
+          }
+        },
+        onRemoteStreamReceived: (stream) => {
+          setRemoteStream(stream);
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = stream;
+          }
+        },
+        onCallEnded: () => {
+          setCallStatus('idle');
+          setShowVideoCallModal(false);
+          setLocalStream(null);
+          setRemoteStream(null);
+          if (callTimerRef.current) {
+            clearInterval(callTimerRef.current);
+          }
+          Swal.fire({
+            title: 'Call Ended',
+            text: 'The video call has been ended.',
+            icon: 'info',
+            confirmButtonColor: '#10b981'
+          });
+        },
+        onCallAccepted: async ({ appointmentId }) => {
+          setCallStatus('connected');
+          callStartTimeRef.current = Date.now();
+          
+          // Start call timer
+          callTimerRef.current = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
+            setCallDuration(elapsed);
+          }, 1000);
+          
+          // Create WebRTC offer as the initiator
+          await videoCallManagerRef.current.createOffer();
+          
+          Swal.fire({
+            title: 'Call Connected!',
+            text: 'Patient has joined the video call.',
+            icon: 'success',
+            confirmButtonColor: '#10b981',
+            timer: 2000,
+            showConfirmButton: false
+          });
+        },
+        onCallDeclined: () => {
+          setCallStatus('idle');
+          setShowVideoCallModal(false);
+          Swal.fire({
+            title: 'Call Declined',
+            text: 'The patient declined the video call.',
+            icon: 'warning',
+            confirmButtonColor: '#f59e0b'
+          });
+        },
+        onCallFailed: ({ reason }) => {
+          setCallStatus('idle');
+          setShowVideoCallModal(false);
+          Swal.fire({
+            title: 'Call Failed',
+            text: reason || 'Failed to initiate video call.',
+            icon: 'error',
+            confirmButtonColor: '#ef4444'
+          });
+        }
+      });
+      
+      return () => {
+        if (videoCallManagerRef.current) {
+          videoCallManagerRef.current.disconnect();
+        }
+      };
+    }
+  }, [user]);
 
   // Check for today's schedule on component mount
   useEffect(() => {
@@ -2616,6 +2872,8 @@ const DoctorDashboard = () => {
     setSelectedDate(today); // Ensure today is selected by default
     fetchAppointments(today);
     fetchMonthlyAppointments(today.getFullYear(), today.getMonth());
+    // Also fetch patients derived from appointments
+    fetchPatientsFromAppointments();
   }, []);
 
   // Fetch appointments when selectedDate changes
@@ -2623,6 +2881,8 @@ const DoctorDashboard = () => {
     if (selectedDate) {
       console.log('📅 Selected date changed, fetching appointments for:', selectedDate.toLocaleDateString());
       fetchAppointments(selectedDate);
+      // refresh patients list as appointments may have changed
+      fetchPatientsFromAppointments();
     }
   }, [selectedDate]);
 
@@ -2670,39 +2930,352 @@ const DoctorDashboard = () => {
     { id: 'upcoming-schedules', label: 'Set Schedules', icon: ClockIcon, gradient: 'from-emerald-500 to-emerald-600' },
     { id: 'prescriptions', label: 'E-Prescribe', icon: BeakerIcon, gradient: 'from-pink-500 to-rose-600' },
     { id: 'records', label: 'Records', icon: DocumentTextIcon, gradient: 'from-indigo-500 to-indigo-600' },
-    { id: 'chat', label: 'Chat', icon: ChatBubbleLeftIcon, gradient: 'from-cyan-500 to-cyan-600' }
   ];
 
-  // Mock data for doctor dashboard
-  const patientList = [
-    {
-      id: 'P12345',
-      name: 'Sarah Johnson',
-      age: 28,
-      gender: 'Female',
-      lastVisit: '2025-07-28',
-      condition: 'Hypertension',
-      vitals: { bp: '140/90', hr: '78', temp: '98.6°F' }
-    },
-    {
-      id: 'P12346',
-      name: 'Michael Chen',
-      age: 45,
-      gender: 'Male',
-      lastVisit: '2025-07-30',
-      condition: 'Diabetes Type 2',
-      vitals: { bp: '130/85', hr: '82', temp: '99.1°F' }
-    },
-    {
-      id: 'P12347',
-      name: 'Emily Davis',
-      age: 32,
-      gender: 'Female',
-      lastVisit: '2025-08-01',
-      condition: 'Allergic Dermatitis',
-      vitals: { bp: '120/80', hr: '72', temp: '98.4°F' }
+  // Dynamic patients list derived from appointments
+  const [patientList, setPatientList] = React.useState([]);
+  const [loadingPatients, setLoadingPatients] = React.useState(false);
+  const [exportingPDF, setExportingPDF] = React.useState(false);
+
+  // Fetch all appointments for this doctor and derive unique patients
+  const fetchPatientsFromAppointments = async () => {
+    setLoadingPatients(true);
+    try {
+      const token = localStorage.getItem('token');
+      const apiUrl = `http://localhost:3001/api/appointments/doctor-appointments`;
+
+      const res = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Failed to fetch appointments: ${res.status} - ${text}`);
+      }
+
+      const result = await res.json();
+      const appointmentsData = result.data || [];
+
+      // Reduce appointments into a map of unique patients
+      const patientMap = {};
+      const now = new Date();
+
+      for (const apt of appointmentsData) {
+        const p = apt.patient;
+        if (!p) continue;
+
+        const patientId = (typeof p === 'object') ? (p._id || p.id) : p;
+        if (!patientId) continue;
+
+        if (!patientMap[patientId]) {
+          const firstName = p.firstName || '';
+          const lastName = p.lastName || '';
+          patientMap[patientId] = {
+            id: patientId,
+            name: `${firstName} ${lastName}`.trim() || `Patient ${String(patientId).slice(-4)}`,
+            email: p.email || 'No email',
+            phone: p.phone || 'No phone',
+            gender: p.gender || 'Not specified',
+            appointmentCount: 0,
+            lastVisit: null,
+            nextAppointment: null
+          };
+        }
+
+        patientMap[patientId].appointmentCount += 1;
+
+        // lastVisit = most recent past appointment
+        const aptDate = new Date(apt.date);
+        if (!patientMap[patientId].lastVisit || new Date(patientMap[patientId].lastVisit) < aptDate) {
+          patientMap[patientId].lastVisit = apt.date;
+        }
+      }
+
+      // Compute nextAppointment (nearest future appointment) per patient
+      for (const pid of Object.keys(patientMap)) {
+        const futureDates = appointmentsData
+          .filter(a => {
+            const aPatientId = (typeof a.patient === 'object') ? (a.patient._id || a.patient.id) : a.patient;
+            return aPatientId === pid && new Date(a.date) >= now;
+          })
+          .map(a => new Date(a.date).getTime());
+
+        if (futureDates.length) {
+          const nearest = new Date(Math.min(...futureDates));
+          patientMap[pid].nextAppointment = nearest.toISOString().split('T')[0];
+        }
+      }
+
+      const patientsArray = Object.values(patientMap).sort((a, b) => b.appointmentCount - a.appointmentCount);
+      setPatientList(patientsArray);
+    } catch (error) {
+      console.error('❌ Error fetching patients from appointments:', error);
+    } finally {
+      setLoadingPatients(false);
     }
-  ];
+  };
+
+  // PDF Export Function
+  const handleExportPatientReport = async () => {
+    // Prevent multiple exports
+    if (exportingPDF) {
+      console.log('🔄 Export already in progress...');
+      return;
+    }
+
+    setExportingPDF(true);
+    
+    try {
+      console.log('🔄 Starting PDF export...');
+      console.log('📊 Patient list data:', patientList);
+      console.log('👤 User data:', user);
+      
+      // Validate required data
+      if (!patientList) {
+        throw new Error('Patient list is not available');
+      }
+
+      // Check if patient data is still loading
+      if (loadingPatients) {
+        throw new Error('Patient data is still loading. Please wait and try again.');
+      }
+
+      const pdf = new jsPDF();
+      const pageHeight = pdf.internal.pageSize.height;
+      let yPosition = 20;
+
+      // Helper function to add new page if needed
+      const checkPageBreak = (requiredHeight = 20) => {
+        if (yPosition + requiredHeight > pageHeight - 20) {
+          pdf.addPage();
+          yPosition = 20;
+        }
+      };
+
+      console.log('📄 Creating PDF document...');
+
+      // Header
+      pdf.setFontSize(20);
+      pdf.setTextColor(75, 85, 99); // Gray-600
+      pdf.text('PATIENT REPORT', 105, yPosition, { align: 'center' });
+      yPosition += 15;
+
+      // Doctor Information
+      const doctorDisplayName = `Dr. ${user?.firstName || 'Doctor'} ${user?.lastName || ''}`;
+      pdf.setFontSize(14);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(doctorDisplayName, 105, yPosition, { align: 'center' });
+      yPosition += 8;
+      
+      if (user?.specialization) {
+        pdf.setFontSize(12);
+        pdf.setTextColor(107, 114, 128);
+        pdf.text(`Specialization: ${user.specialization}`, 105, yPosition, { align: 'center' });
+        yPosition += 8;
+      }
+
+      // Report Date
+      pdf.setFontSize(10);
+      pdf.setTextColor(107, 114, 128);
+      const reportDate = new Date().toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      pdf.text(`Report Generated: ${reportDate}`, 105, yPosition, { align: 'center' });
+      yPosition += 20;
+
+      console.log('📈 Adding summary statistics...');
+
+      // Summary Statistics
+      checkPageBreak(60);
+      pdf.setFontSize(16);
+      pdf.setTextColor(79, 70, 229); // Indigo-600
+      pdf.text('PRACTICE SUMMARY', 20, yPosition);
+      yPosition += 15;
+
+      const totalPatients = Array.isArray(patientList) ? patientList.length : 0;
+      const totalAppointments = Array.isArray(patientList) ? 
+        patientList.reduce((sum, p) => sum + (p?.appointmentCount || 0), 0) : 0;
+      const activePatients = Array.isArray(patientList) ? 
+        patientList.filter(p => p?.nextAppointment).length : 0;
+      const avgAppointmentsPerPatient = totalPatients > 0 ? 
+        Math.round(totalAppointments / totalPatients) : 0;
+
+      // Get consultation fee for revenue calculation
+      const consultationFeeAmount = consultationFee?.amount || 500; // Default fee if not set
+      const estimatedRevenue = totalAppointments * consultationFeeAmount;
+
+      // Summary data
+      const summaryData = [
+        ['Total Patients', totalPatients.toString()],
+        ['Active Patients (with upcoming appointments)', activePatients.toString()],
+        ['Total Appointments Completed', totalAppointments.toString()],
+        ['Average Appointments per Patient', avgAppointmentsPerPatient.toString()],
+        ['Consultation Fee per Appointment', `₹${consultationFeeAmount}`],
+        ['Estimated Total Revenue', `₹${estimatedRevenue.toLocaleString('en-IN')}`]
+      ];
+
+      // Create summary table
+      autoTable(pdf, {
+        startY: yPosition,
+        head: [['Metric', 'Value']],
+        body: summaryData,
+        theme: 'striped',
+        headStyles: { 
+          fillColor: [79, 70, 229], // Indigo-600
+          textColor: 255,
+          fontSize: 12,
+          fontStyle: 'bold'
+        },
+        bodyStyles: { 
+          fontSize: 10,
+          textColor: [31, 41, 55] // Gray-800
+        },
+        alternateRowStyles: { 
+          fillColor: [249, 250, 251] // Gray-50
+        },
+        margin: { left: 20, right: 20 }
+      });
+
+      yPosition = pdf.lastAutoTable.finalY + 20;
+
+      console.log('👥 Adding patient details...');
+
+      // Patient Details Section
+      checkPageBreak(40);
+      pdf.setFontSize(16);
+      pdf.setTextColor(79, 70, 229);
+      pdf.text('PATIENT DETAILS', 20, yPosition);
+      yPosition += 15;
+
+      if (!Array.isArray(patientList) || patientList.length === 0) {
+        pdf.setFontSize(12);
+        pdf.setTextColor(107, 114, 128);
+        pdf.text('No patients found in the system.', 20, yPosition);
+      } else {
+        // Prepare patient data for table
+        const patientTableData = patientList.map((patient, index) => [
+          (index + 1).toString(),
+          patient?.name || 'Unknown',
+          patient?.email || 'Not provided',
+          patient?.phone || 'Not provided',
+          patient?.gender || 'Not specified',
+          (patient?.appointmentCount || 0).toString(),
+          patient?.lastVisit ? new Date(patient.lastVisit).toLocaleDateString() : 'No visits',
+          patient?.nextAppointment ? new Date(patient.nextAppointment).toLocaleDateString() : 'None scheduled'
+        ]);
+
+        // Create patient table
+        autoTable(pdf, {
+          startY: yPosition,
+          head: [['#', 'Patient Name', 'Email', 'Phone', 'Gender', 'Total Appointments', 'Last Visit', 'Next Appointment']],
+          body: patientTableData,
+          theme: 'striped',
+          headStyles: { 
+            fillColor: [16, 185, 129], // Emerald-500
+            textColor: 255,
+            fontSize: 10,
+            fontStyle: 'bold'
+          },
+          bodyStyles: { 
+            fontSize: 9,
+            textColor: [31, 41, 55]
+          },
+          alternateRowStyles: { 
+            fillColor: [236, 253, 245] // Emerald-50
+          },
+          columnStyles: {
+            0: { cellWidth: 10 }, // #
+            1: { cellWidth: 35 }, // Name
+            2: { cellWidth: 45 }, // Email
+            3: { cellWidth: 30 }, // Phone
+            4: { cellWidth: 20 }, // Gender
+            5: { cellWidth: 20 }, // Appointments
+            6: { cellWidth: 25 }, // Last Visit
+            7: { cellWidth: 25 }  // Next Appointment
+          },
+          margin: { left: 10, right: 10 },
+          styles: {
+            overflow: 'linebreak',
+            fontSize: 9
+          }
+        });
+
+        yPosition = pdf.lastAutoTable.finalY + 20;
+      }
+
+      console.log('📝 Adding footer...');
+
+      // Footer with additional information
+      checkPageBreak(30);
+      pdf.setFontSize(10);
+      pdf.setTextColor(107, 114, 128);
+      pdf.text('This report contains confidential patient information and should be handled according to privacy regulations.', 105, yPosition, { align: 'center' });
+      yPosition += 10;
+      pdf.text(`Healthcare Management System | ${new Date().getFullYear()}`, 105, yPosition, { align: 'center' });
+
+      // Page numbers
+      const totalPages = pdf.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(8);
+        pdf.setTextColor(107, 114, 128);
+        pdf.text(`Page ${i} of ${totalPages}`, 200, pageHeight - 10, { align: 'right' });
+      }
+
+      console.log('💾 Saving PDF...');
+
+      // Generate filename
+      const doctorFileName = `${user?.firstName || 'Doctor'}_${user?.lastName || 'Report'}`.replace(/\s+/g, '_');
+      const dateStr = new Date().toISOString().split('T')[0];
+      const filename = `Patient_Report_${doctorFileName}_${dateStr}.pdf`;
+
+      // Save the PDF
+      pdf.save(filename);
+
+      console.log('✅ PDF export completed successfully!');
+
+      // Show success message
+      Swal.fire({
+        icon: 'success',
+        title: 'Report Generated!',
+        text: `Patient report has been downloaded as ${filename}`,
+        timer: 3000,
+        timerProgressBar: true
+      });
+
+    } catch (error) {
+      console.error('❌ Error generating PDF report:', error);
+      console.error('Error stack:', error.stack);
+      
+      // More specific error handling
+      let errorMessage = 'Failed to generate the PDF report. Please try again.';
+      
+      if (error.message.includes('Patient list is not available')) {
+        errorMessage = 'No patient data available to export. Please wait for data to load.';
+      } else if (error.message.includes('still loading')) {
+        errorMessage = 'Patient data is still loading. Please wait and try again.';
+      } else if (error.message.includes('jsPDF')) {
+        errorMessage = 'PDF library error. Please refresh the page and try again.';
+      }
+      
+      Swal.fire({
+        icon: 'error',
+        title: 'Export Failed',
+        text: errorMessage,
+        footer: `Debug info: ${error.message}`,
+        timer: 5000,
+        timerProgressBar: true
+      });
+    } finally {
+      setExportingPDF(false);
+    }
+  };
 
   const sendChatMessage = () => {
     if (newMessage.trim()) {
@@ -3077,10 +3650,7 @@ const DoctorDashboard = () => {
                     <ClockIcon className="h-5 w-5 mr-2" />
                     Today
                   </button>
-                  <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center">
-                    <PlusIcon className="h-5 w-5 mr-2" />
-                    Schedule New
-                  </button>
+                  
                 </div>
               </div>
             </div>
@@ -3149,6 +3719,7 @@ const DoctorDashboard = () => {
                     selectedDate={selectedDate}
                     onDateSelect={setSelectedDate}
                     appointments={allAppointments}
+                    appointmentsByDate={appointmentsByDate}
                   />
                 </div>
               </div>
@@ -3203,9 +3774,112 @@ const DoctorDashboard = () => {
                         <p className="text-sm">No appointments scheduled for {selectedDate.toLocaleDateString()}</p>
                       </div>
                     ) : (
-                      appointments.map((appointment) => (
-                        <AppointmentCard key={appointment._id} appointment={appointment} />
-                      ))
+                      <div className="space-y-6">
+                        {appointments.map((appointment, index) => {
+                          const appointmentDate = new Date(appointment.appointmentDate);
+                          const isToday = appointmentDate.toDateString() === new Date().toDateString();
+                          const isUpcoming = appointmentDate > new Date();
+                          
+                          return (
+                            <div key={appointment.id} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border border-gray-100 hover:border-orange-200">
+                              <div className="p-4">
+                                {/* Compact Header with Patient Info */}
+                                <div className="flex items-center justify-between mb-3">
+                                  <div className="flex items-center space-x-3">
+                                    <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-lg">
+                                      {appointment.patient?.charAt(0) || 'P'}
+                                    </div>
+                                    <div className="flex-1">
+                                      <h3 className="text-lg font-bold text-gray-900">
+                                        {appointment.patient || 'Unknown Patient'}
+                                      </h3>
+                                      <p className="text-sm text-gray-600">
+                                        Reason: {appointment.symptoms || 'No reason provided'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                    isToday ? 'bg-emerald-500 text-white' :
+                                    isUpcoming ? 'bg-blue-500 text-white' : 'bg-gray-500 text-white'
+                                  }`}>
+                                    {isToday ? 'TODAY' : isUpcoming ? 'UPCOMING' : 'PAST'}
+                                  </span>
+                                </div>
+
+                                {/* Compact Date & Time Info */}
+                                <div className="flex items-center justify-between mb-4 p-3 bg-gray-50 rounded-lg">
+                                  <div className="flex items-center space-x-4">
+                                    <div className="flex items-center text-sm text-gray-700">
+                                      <CalendarDaysIcon className="w-4 h-4 mr-2 text-orange-600" />
+                                      <span className="font-medium">
+                                        {appointmentDate.toLocaleDateString('en-US', {
+                                          weekday: 'short',
+                                          month: 'short',
+                                          day: 'numeric'
+                                        })}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center text-sm text-gray-700">
+                                      <ClockIcon className="w-4 h-4 mr-2 text-orange-600" />
+                                      <span className="font-medium">{appointment.timeSlot}</span>
+                                    </div>
+                                    <div className="flex items-center text-sm text-gray-700">
+                                      <span className="font-medium">Duration: {appointment.duration}min</span>
+                                    </div>
+                                    <div className={`text-sm font-medium ${
+                                      appointment.status === 'confirmed' || appointment.status === 'scheduled' ? 'text-emerald-600' :
+                                      appointment.status === 'pending' ? 'text-yellow-600' : 
+                                      appointment.status === 'completed' ? 'text-blue-600' : 'text-red-600'
+                                    }`}>
+                                      {appointment.status?.charAt(0).toUpperCase() + appointment.status?.slice(1)}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Compact Action Buttons */}
+                                <div className="flex flex-wrap gap-2">
+                                  {(appointment.type === 'Video Call' || appointment.type === 'consultation') && 
+                                   (appointment.status === 'scheduled' || appointment.status === 'confirmed') && (
+                                    <button 
+                                      onClick={() => startVideoCall(appointment)}
+                                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center"
+                                    >
+                                      <VideoCameraIcon className="w-4 h-4 mr-1" />
+                                      Start Video Call
+                                    </button>
+                                  )}
+                                  
+                                  <button 
+                                    onClick={() => handleViewAppointmentDetails(appointment)}
+                                    className="bg-orange-600 hover:bg-orange-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center"
+                                  >
+                                    <EyeIcon className="w-4 h-4 mr-1" />
+                                    View Details
+                                  </button>
+                                  
+                                  <button className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center">
+                                    <UserIcon className="w-4 h-4 mr-1" />
+                                    Patient History
+                                  </button>
+                                  
+                                  {(appointment.status === 'scheduled' || appointment.status === 'confirmed') && (
+                                    <button 
+                                      onClick={() => handleMarkComplete(appointment)}
+                                      disabled={updatingAppointmentStatus}
+                                      className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center"
+                                    >
+                                      <CheckCircleIcon className="w-4 h-4 mr-1" />
+                                      {updatingAppointmentStatus ? 'Updating...' : 'Mark Complete'}
+                                    </button>
+                                  )}
+                                  
+                                  
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -3217,72 +3891,234 @@ const DoctorDashboard = () => {
       case 'patients':
         return (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center">
-                <UsersIcon className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 text-purple-600" />
-                <span className="hidden sm:inline">Patient Profiles</span>
-                <span className="sm:hidden">Patients</span>
-              </h2>
-              <Button className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-sm">
-                <UserIcon className="w-4 h-4 mr-2" />
-                <span className="hidden sm:inline">Add Patient</span>
-                <span className="sm:hidden">Add</span>
-              </Button>
+            {/* Header Section */}
+            <div className="flex flex-col space-y-4">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-4 sm:space-y-0">
+                <div>
+                  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 flex items-center">
+                    <UsersIcon className="w-8 h-8 mr-3 text-purple-600" />
+                    My Patients
+                  </h2>
+                  <p className="text-gray-600 mt-1">Manage all patients who have booked appointments</p>
+                </div>
+                <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
+                  
+                  <Button 
+                    variant="outline" 
+                    className="border-purple-200 text-purple-600 hover:bg-purple-100 hover:border-purple-300"
+                    onClick={handleExportPatientReport}
+                    disabled={exportingPDF || loadingPatients}
+                  >
+                    {exportingPDF ? (
+                      <>
+                        <ArrowPathIcon className="w-4 h-4 mr-2 animate-spin" />
+                        Generating PDF...
+                      </>
+                    ) : (
+                      <>
+                        <DocumentTextIcon className="w-4 h-4 mr-2" />
+                        Export List
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Search and Filter Bar */}
+              <div className="flex flex-col lg:flex-row space-y-3 lg:space-y-0 lg:space-x-4">
+                <div className="flex-1 relative">
+                  <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search patients by name, ID, or condition..."
+                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80 backdrop-blur-sm"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <select className="px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80 backdrop-blur-sm">
+                    <option value="">All Conditions</option>
+                    <option value="hypertension">Hypertension</option>
+                    <option value="diabetes">Diabetes</option>
+                    <option value="allergies">Allergies</option>
+                    <option value="cardiology">Cardiology</option>
+                  </select>
+                  <select className="px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80 backdrop-blur-sm">
+                    <option value="">Sort by</option>
+                    <option value="name">Name A-Z</option>
+                    <option value="recent">Most Recent</option>
+                    <option value="appointments">Most Appointments</option>
+                  </select>
+                </div>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+            {/* Stats Overview */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Card className="bg-gradient-to-br from-blue-500 to-blue-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-blue-100 text-sm font-medium">Total Patients</p>
+                      <p className="text-3xl font-bold">{patientList.length}</p>
+                      <p className="text-blue-200 text-xs mt-1">+3 this week</p>
+                    </div>
+                    <div className="bg-white/20 p-3 rounded-full">
+                      <UsersIcon className="w-6 h-6" />
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-green-500 to-green-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-green-100 text-sm font-medium">Active Cases</p>
+                      <p className="text-3xl font-bold">{patientList.filter(p => p.status === 'Active').length}</p>
+                      <p className="text-green-200 text-xs mt-1">{patientList.filter(p => p.priority === 'High').length} high priority</p>
+                    </div>
+                    <div className="bg-white/20 p-3 rounded-full">
+                      <HeartIcon className="w-6 h-6" />
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-yellow-500 to-orange-500 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-yellow-100 text-sm font-medium">Total Appointments</p>
+                      <p className="text-3xl font-bold">{patientList.reduce((sum, p) => sum + p.appointmentCount, 0)}</p>
+                      <p className="text-yellow-200 text-xs mt-1">All time</p>
+                    </div>
+                    <div className="bg-white/20 p-3 rounded-full">
+                      <CalendarDaysIcon className="w-6 h-6" />
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-purple-500 to-purple-600 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-purple-100 text-sm font-medium">Avg per Patient</p>
+                      <p className="text-3xl font-bold">{Math.round(patientList.reduce((sum, p) => sum + p.appointmentCount, 0) / patientList.length)}</p>
+                      <p className="text-purple-200 text-xs mt-1">appointments</p>
+                    </div>
+                    <div className="bg-white/20 p-3 rounded-full">
+                      <ClockIcon className="w-6 h-6" />
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+
+            {/* Patient Cards Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
               {patientList.map((patient) => (
-                <Card key={patient.id} className="bg-white/80 backdrop-blur-sm border-0 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2">
+                <Card key={patient.id} className="bg-white/90 backdrop-blur-sm border-0 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1 group">
                   <div className="p-6">
-                    <div className="flex items-center space-x-4 mb-4">
-                      <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-blue-600 rounded-full flex items-center justify-center text-white text-2xl">
-                        {patient.avatar}
+                    {/* Patient Header */}
+                    <div className="flex items-start space-x-4 mb-6">
+                      <div className="relative">
+                        <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white text-2xl font-bold shadow-lg">
+                          {patient.name.split(' ').map(n => n[0]).join('')}
+                        </div>
+                        <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-green-500 border-2 border-white rounded-full flex items-center justify-center">
+                          <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-bold text-lg text-gray-900">{patient.name}</h3>
-                        <p className="text-gray-600">{patient.age} years • {patient.gender}</p>
-                        <p className="text-xs text-gray-500">ID: {patient.id}</p>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-bold text-xl text-gray-900 truncate group-hover:text-purple-600 transition-colors">{patient.name}</h3>
+                        <p className="text-gray-600 text-sm">{patient.age} years • {patient.gender}</p>
+    
                       </div>
                     </div>
-                    
-                    <div className="space-y-3 mb-4">
-                      <div className="bg-gray-50 p-3 rounded-lg">
-                        <div className="text-xs text-gray-500">Last Visit</div>
-                        <div className="font-medium">{patient.lastVisit}</div>
-                      </div>
-                      <div className="bg-red-50 p-3 rounded-lg">
-                        <div className="text-xs text-red-600">Condition</div>
-                        <div className="font-medium text-red-700">{patient.condition}</div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-center">
-                        <div className="bg-blue-50 p-2 rounded">
-                          <div className="text-xs text-blue-600">BP</div>
-                          <div className="font-medium text-blue-700">{patient.vitals.bp}</div>
+
+
+                    {/* Condition & Last Visit */}
+                    <div className="space-y-3 mb-6">
+                      <div className="bg-gradient-to-r from-red-50 to-pink-50 p-4 rounded-xl border border-red-100">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs text-red-600 font-medium uppercase tracking-wide">Primary Condition</div>
+                            <div className="font-bold text-red-700 mt-1">{patient.condition}</div>
+                          </div>
+                          <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
+                            <ExclamationTriangleIcon className="w-4 h-4 text-red-600" />
+                          </div>
                         </div>
-                        <div className="bg-green-50 p-2 rounded">
-                          <div className="text-xs text-green-600">HR</div>
-                          <div className="font-medium text-green-700">{patient.vitals.hr}</div>
-                        </div>
-                        <div className="bg-orange-50 p-2 rounded">
-                          <div className="text-xs text-orange-600">Temp</div>
-                          <div className="font-medium text-orange-700">{patient.vitals.temp}</div>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-xl">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs text-gray-600 font-medium">Last Appointment</div>
+                            <div className="font-medium text-gray-900 mt-1">{new Date(patient.lastVisit).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {Math.ceil((new Date() - new Date(patient.lastVisit)) / (1000 * 60 * 60 * 24))} days ago
+                          </div>
                         </div>
                       </div>
                     </div>
-                    
-                    <Button 
-                      onClick={() => {
-                        setSelectedPatient(patient);
-                        setShowPatientModal(true);
-                      }}
-                      className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-                    >
-                      View Full Profile
-                    </Button>
+
+                    {/* Action Buttons */}
+                    <div className="flex space-x-2">
+                      <Button 
+                        onClick={() => {
+                          setSelectedPatient(patient);
+                          setShowPatientModal(true);
+                        }}
+                        className="flex-1 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-sm font-medium shadow-md"
+                      >
+                        <EyeIcon className="w-4 h-4 mr-2" />
+                        View Profile
+                      </Button>
+                      
+                      <Button 
+                        variant="outline" 
+                        className="px-3 border-green-200 text-green-600 hover:bg-green-100 hover:border-green-300"
+                      >
+                        <PhoneIcon className="w-4 h-4" />
+                      </Button>
+                    </div>
+
                   </div>
                 </Card>
               ))}
             </div>
+
+            {/* Empty State (when no patients) */}
+            {patientList.length === 0 && (
+              <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl">
+                <div className="p-12 text-center">
+                  <div className="w-24 h-24 mx-auto bg-purple-100 rounded-full flex items-center justify-center mb-6">
+                    <UsersIcon className="w-12 h-12 text-purple-600" />
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">No Patients Yet</h3>
+                  <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                    Patients who book appointments with you will appear here. Start by setting up your availability schedule.
+                  </p>
+                  <Button className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700">
+                    <CalendarDaysIcon className="w-4 h-4 mr-2" />
+                    Set Availability
+                  </Button>
+                </div>
+              </Card>
+            )}
+
+            {/* Load More Button */}
+            {patientList.length > 0 && (
+              <div className="text-center">
+                <Button variant="outline" className="border-purple-200 text-purple-600 hover:bg-purple-100 hover:border-purple-300">
+                  <ArrowDownIcon className="w-4 h-4 mr-2" />
+                  Load More Patients
+                </Button>
+              </div>
+            )}
           </div>
         );
 
@@ -3990,89 +4826,7 @@ const DoctorDashboard = () => {
           </div>
         );
 
-      case 'chat':
-        return (
-          <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-                <ChatBubbleLeftIcon className="mr-3 h-8 w-8 text-blue-600" />
-                Live Chat with Patients
-              </h2>
-              <div className="text-sm text-gray-500">
-                Last active: {currentTime.toLocaleTimeString()}
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
-              <Card className="lg:col-span-1 bg-white/80 backdrop-blur-sm border-0 shadow-xl">
-                <div className="p-3 sm:p-4">
-                  <h3 className="font-bold text-gray-900 mb-3 sm:mb-4 text-sm sm:text-base">Active Chats</h3>
-                  <div className="space-y-2 sm:space-y-3">
-                    {patientList.map((patient) => (
-                      <div key={patient.id} className="flex items-center space-x-2 sm:space-x-3 p-2 sm:p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors">
-                        <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-sm sm:text-base">
-                          {patient.avatar}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-xs sm:text-sm truncate">{patient.name}</div>
-                          <div className="text-xs text-gray-500">Online</div>
-                        </div>
-                        <div className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0"></div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </Card>
-
-              <Card className="lg:col-span-3 bg-white/80 backdrop-blur-sm border-0 shadow-xl h-80 sm:h-96">
-                <div className="flex flex-col h-full p-3 sm:p-4">
-                  <div className="flex-1 overflow-y-auto space-y-3 sm:space-y-4 mb-3 sm:mb-4">
-                    {chatMessages.map((message) => (
-                      <div key={message.id} className={`flex ${message.sender === 'doctor' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-xs px-3 sm:px-4 py-2 rounded-lg text-sm ${
-                          message.sender === 'doctor' 
-                            ? 'bg-blue-500 text-white' 
-                            : 'bg-gray-200 text-gray-800'
-                        }`}>
-                          <div>{message.text}</div>
-                          <div className={`text-xs mt-1 ${
-                            message.sender === 'doctor' ? 'text-blue-100' : 'text-gray-500'
-                          }`}>
-                            {message.time.toLocaleTimeString()}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    {chatMessages.length === 0 && (
-                      <div className="text-center text-gray-500 py-6 sm:py-8">
-                        <ChatBubbleLeftIcon className="h-8 w-8 sm:h-10 sm:w-10 mb-2 text-blue-600" />
-                        <div className="text-sm sm:text-base">Select a patient to start chatting</div>
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div className="flex space-x-2">
-                    <input
-                      type="text"
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()}
-                      placeholder="Type your message..."
-                      className="flex-1 px-3 sm:px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                    />
-                    <Button 
-                      onClick={sendChatMessage}
-                      className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-sm px-3 sm:px-4"
-                    >
-                      <span className="hidden sm:inline">Send</span>
-                      <span className="sm:hidden">→</span>
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          </div>
-        );
+      
 
       case 'upcoming-schedules':
         return (
@@ -5040,6 +5794,7 @@ const DoctorDashboard = () => {
         onClose={() => setShowPatientModal(false)}
         title="Patient Profile"
         size="lg"
+        backgroundBlur={true}
       >
         {selectedPatient && (
           <div className="space-y-6">
@@ -5889,12 +6644,347 @@ const DoctorDashboard = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Appointment Details Modal */}
+      <Modal
+        isOpen={showAppointmentDetailsModal}
+        onClose={() => setShowAppointmentDetailsModal(false)}
+        title="Appointment Details"
+        size="lg"
+        backgroundBlur={true}
+      >
+        {selectedAppointment && (
+          <div className="space-y-6">
+            {/* Patient Information */}
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Patient Information</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <span className="font-medium text-gray-600">Name:</span>
+                  <p className="text-gray-900">{selectedAppointment.patient}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Gender:</span>
+                  <p className="text-gray-900">{selectedAppointment.gender}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Email:</span>
+                  <p className="text-gray-900">{selectedAppointment.patientEmail}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Phone:</span>
+                  <p className="text-gray-900">{selectedAppointment.patientPhone}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Appointment Information */}
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Appointment Details</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <span className="font-medium text-gray-600">Date:</span>
+                  <p className="text-gray-900">{new Date(selectedAppointment.appointmentDate).toLocaleDateString()}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Time:</span>
+                  <p className="text-gray-900">{selectedAppointment.timeSlot}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Type:</span>
+                  <p className="text-gray-900">{selectedAppointment.type}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Status:</span>
+                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
+                    selectedAppointment.status === 'completed' ? 'bg-green-100 text-green-800' :
+                    selectedAppointment.status === 'scheduled' || selectedAppointment.status === 'confirmed' ? 'bg-blue-100 text-blue-800' :
+                    selectedAppointment.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                    'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {selectedAppointment.status.charAt(0).toUpperCase() + selectedAppointment.status.slice(1)}
+                  </span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Duration:</span>
+                  <p className="text-gray-900">{selectedAppointment.duration} minutes</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Priority:</span>
+                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
+                    selectedAppointment.priority === 'high' ? 'bg-red-100 text-red-800' :
+                    selectedAppointment.priority === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-green-100 text-green-800'
+                  }`}>
+                    {selectedAppointment.priority.charAt(0).toUpperCase() + selectedAppointment.priority.slice(1)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Symptoms/Reason */}
+            <div className="bg-orange-50 p-4 rounded-lg">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Reason for Visit</h3>
+              <p className="text-gray-900 whitespace-pre-wrap">{selectedAppointment.symptoms}</p>
+            </div>
+
+            {/* Additional Information */}
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Additional Information</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="font-medium text-gray-600">Patient ID:</span>
+                  <p className="text-gray-900">{selectedAppointment.patientId}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Appointment ID:</span>
+                  <p className="text-gray-900">{selectedAppointment.id}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Created:</span>
+                  <p className="text-gray-900">{new Date(selectedAppointment.createdAt).toLocaleString()}</p>
+                </div>
+                {selectedAppointment.updatedAt !== selectedAppointment.createdAt && (
+                  <div>
+                    <span className="font-medium text-gray-600">Last Updated:</span>
+                    <p className="text-gray-900">{new Date(selectedAppointment.updatedAt).toLocaleString()}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-wrap gap-3 pt-4 border-t">
+              {(selectedAppointment.status === 'scheduled' || selectedAppointment.status === 'confirmed') && (
+                <>
+                  <Button 
+                    onClick={() => {
+                      setShowAppointmentDetailsModal(false);
+                      handleMarkComplete(selectedAppointment);
+                    }}
+                    disabled={updatingAppointmentStatus}
+                    variant="primary"
+                  >
+                    <CheckCircleIcon className="w-4 h-4 mr-2" />
+                    {updatingAppointmentStatus ? 'Updating...' : 'Mark Complete'}
+                  </Button>
+                  {(selectedAppointment.type === 'Video Call' || selectedAppointment.type === 'consultation') && (
+                    <Button 
+                      onClick={() => {
+                        setShowAppointmentDetailsModal(false);
+                        startVideoCall(selectedAppointment);
+                      }}
+                      variant="primary"
+                    >
+                      <VideoCameraIcon className="w-4 h-4 mr-2" />
+                      Start Video Call
+                    </Button>
+                  )}
+                </>
+              )}
+              <Button variant="outline">
+                <UserIcon className="w-4 h-4 mr-2" />
+                Patient History
+              </Button>
+              <Button variant="outline" onClick={() => setShowAppointmentDetailsModal(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Video Call Modal */}
+      <Modal
+        isOpen={showVideoCallModal}
+        onClose={() => {
+          if (callStatus === 'connected') {
+            // Show confirmation before ending call
+            Swal.fire({
+              title: 'End Call?',
+              text: 'Are you sure you want to end the consultation?',
+              icon: 'warning',
+              showCancelButton: true,
+              confirmButtonText: 'End Call',
+              cancelButtonText: 'Continue',
+              confirmButtonColor: '#ef4444',
+              cancelButtonColor: '#6b7280'
+            }).then((result) => {
+              if (result.isConfirmed) {
+                endCall();
+              }
+            });
+          } else {
+            endCall();
+          }
+        }}
+        title={
+          callStatus === 'waiting' ? 'Waiting for Patient' :
+          callStatus === 'connected' ? `Consultation - ${formatCallDuration(callDuration)}` :
+          callStatus === 'ended' ? 'Call Ended' :
+          'Video Consultation'
+        }
+        size="full"
+        backgroundBlur={true}
+      >
+        <div className="h-full flex flex-col">
+          {/* Call Status Header */}
+          {callStatus !== 'connected' && (
+            <div className="text-center p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg mb-4">
+              {callStatus === 'initiating' && (
+                <div className="flex items-center justify-center space-x-3">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                  <span className="text-blue-700 font-medium">Starting video call...</span>
+                </div>
+              )}
+              {callStatus === 'waiting' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-center space-x-3">
+                    <div className="animate-pulse h-3 w-3 bg-blue-500 rounded-full"></div>
+                    <span className="text-blue-700 font-medium">Waiting for patient to join...</span>
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    Patient has been notified and will receive a join call button
+                  </p>
+                </div>
+              )}
+              {callStatus === 'ended' && (
+                <div className="text-green-700 font-medium">
+                  Call completed successfully
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Video Container */}
+          <div className="flex-1 relative bg-gray-900 rounded-lg overflow-hidden">
+            {/* Remote Video (Patient) */}
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="w-full h-full object-cover"
+              style={{ display: remoteStream ? 'block' : 'none' }}
+            />
+            
+            {/* No Remote Video Placeholder */}
+            {!remoteStream && callStatus === 'connected' && (
+              <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                <div className="text-center text-white">
+                  <UserIcon className="w-24 h-24 mx-auto mb-4 opacity-50" />
+                  <p className="text-lg">Patient camera is off</p>
+                </div>
+              </div>
+            )}
+
+            {/* Waiting State */}
+            {callStatus === 'waiting' && (
+              <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                <div className="text-center text-white">
+                  <VideoCameraIcon className="w-24 h-24 mx-auto mb-4 opacity-50" />
+                  <p className="text-lg">Waiting for patient...</p>
+                  <p className="text-sm opacity-75 mt-2">
+                    Patient: {selectedAppointment?.patient}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Local Video (Doctor) - Picture in Picture */}
+            <div className="absolute top-4 right-4 w-48 h-36 bg-gray-800 rounded-lg overflow-hidden border-2 border-white shadow-lg">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+                style={{ display: isVideoEnabled && localStream ? 'block' : 'none' }}
+              />
+              {(!isVideoEnabled || !localStream) && (
+                <div className="w-full h-full flex items-center justify-center bg-gray-700">
+                  <VideoCameraSlashIcon className="w-8 h-8 text-gray-400" />
+                </div>
+              )}
+              <div className="absolute bottom-2 left-2 text-white text-xs bg-black/50 px-2 py-1 rounded">
+                You
+              </div>
+            </div>
+
+            {/* Call Controls */}
+            {callStatus === 'connected' && (
+              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center space-x-4 bg-black/70 backdrop-blur-sm rounded-full px-6 py-3">
+                <button
+                  onClick={toggleAudio}
+                  className={`p-3 rounded-full transition-colors ${
+                    isAudioEnabled 
+                      ? 'bg-gray-600 hover:bg-gray-500 text-white' 
+                      : 'bg-red-500 hover:bg-red-600 text-white'
+                  }`}
+                >
+                  {isAudioEnabled ? (
+                    <MicrophoneIcon className="w-5 h-5" />
+                  ) : (
+                    <XMarkIcon className="w-5 h-5" />
+                  )}
+                </button>
+
+                <button
+                  onClick={toggleVideo}
+                  className={`p-3 rounded-full transition-colors ${
+                    isVideoEnabled 
+                      ? 'bg-gray-600 hover:bg-gray-500 text-white' 
+                      : 'bg-red-500 hover:bg-red-600 text-white'
+                  }`}
+                >
+                  {isVideoEnabled ? (
+                    <VideoCameraIcon className="w-5 h-5" />
+                  ) : (
+                    <VideoCameraSlashIcon className="w-5 h-5" />
+                  )}
+                </button>
+
+                <button
+                  onClick={endCall}
+                  className="p-3 rounded-full bg-red-500 hover:bg-red-600 text-white transition-colors"
+                >
+                  <PhoneIcon className="w-5 h-5 transform rotate-45" />
+                </button>
+              </div>
+            )}
+
+            {/* Call Timer */}
+            {callStatus === 'connected' && (
+              <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm text-white px-3 py-1 rounded-full text-sm">
+                {formatCallDuration(callDuration)}
+              </div>
+            )}
+          </div>
+
+          {/* Patient Info Footer */}
+          {selectedAppointment && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-medium text-gray-900">{selectedAppointment.patient}</h4>
+                  <p className="text-sm text-gray-600">
+                    {selectedAppointment.type} • {selectedAppointment.timeSlot}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-gray-600">Reason for visit:</p>
+                  <p className="font-medium text-gray-900">{selectedAppointment.symptoms}</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };
 
 // Calendar Component for Appointment Selection
-const AppointmentCalendar = ({ selectedDate, onDateSelect, appointments = [] }) => {
+const AppointmentCalendar = ({ selectedDate, onDateSelect, appointments = [], appointmentsByDate = {} }) => {
   const [currentMonth, setCurrentMonth] = useState(selectedDate);
   
   const today = new Date();
@@ -5922,17 +7012,43 @@ const AppointmentCalendar = ({ selectedDate, onDateSelect, appointments = [] }) 
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   
   const hasAppointments = (date) => {
-    const dateStr = date.toISOString().split('T')[0];
-    return appointments.some(apt => 
-      new Date(apt.appointmentDate).toISOString().split('T')[0] === dateStr
-    );
+    // For now, only show indicator for currently selected date with appointments
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    
+    // Check if this date matches the selected date and has appointments
+    const selectedYear = selectedDate.getFullYear();
+    const selectedMonth = String(selectedDate.getMonth() + 1).padStart(2, '0');
+    const selectedDay = String(selectedDate.getDate()).padStart(2, '0');
+    const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
+    
+    if (dateStr === selectedDateStr && appointments.length > 0) {
+      return true;
+    }
+    
+    return appointmentsByDate[dateStr] > 0;
   };
   
   const getAppointmentCount = (date) => {
-    const dateStr = date.toISOString().split('T')[0];
-    return appointments.filter(apt => 
-      new Date(apt.appointmentDate).toISOString().split('T')[0] === dateStr
-    ).length;
+    // For now, only show count for currently selected date with appointments
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    
+    // Check if this date matches the selected date and has appointments
+    const selectedYear = selectedDate.getFullYear();
+    const selectedMonth = String(selectedDate.getMonth() + 1).padStart(2, '0');
+    const selectedDay = String(selectedDate.getDate()).padStart(2, '0');
+    const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
+    
+    if (dateStr === selectedDateStr && appointments.length > 0) {
+      return appointments.length;
+    }
+    
+    return appointmentsByDate[dateStr] || 0;
   };
   
   const handleDateClick = (clickedDate) => {
@@ -6218,7 +7334,8 @@ const AppointmentCard = ({ appointment }) => {
           
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2">
-            {(appointment.type === 'Video Call' || appointment.type === 'consultation') && appointment.status === 'scheduled' && (
+            {(appointment.type === 'Video Call' || appointment.type === 'consultation') && 
+             (appointment.status === 'scheduled' || appointment.status === 'confirmed') && (
               <button 
                 onClick={handleVideoConsultation}
                 className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center"
@@ -6228,7 +7345,7 @@ const AppointmentCard = ({ appointment }) => {
               </button>
             )}
             
-            {appointment.status === 'scheduled' && (
+            {(appointment.status === 'scheduled' || appointment.status === 'confirmed') && (
               <button 
                 onClick={handleMarkCompleted}
                 className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center"
