@@ -33,6 +33,8 @@ import {
   ExclamationTriangleIcon,
   CheckCircleIcon,
   ArrowPathIcon,
+  PencilSquareIcon,
+  ClipboardDocumentListIcon,
   VideoCameraSlashIcon,
   MicrophoneIcon,
   SpeakerXMarkIcon
@@ -44,6 +46,18 @@ const PatientDashboard = () => {
   const [showSymptomChecker, setShowSymptomChecker] = useState(false);
   const [showChatbot, setShowChatbot] = useState(false);
   const [symptoms, setSymptoms] = useState('');
+  const [symptomAnalysis, setSymptomAnalysis] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisHistory, setAnalysisHistory] = useState([]);
+  const [selectedSymptoms, setSelectedSymptoms] = useState([]);
+  const [symptomSeverity, setSymptomSeverity] = useState('mild');
+  const [symptomDuration, setSymptomDuration] = useState('');
+  const [additionalInfo, setAdditionalInfo] = useState({
+    age: '',
+    gender: '',
+    medicalHistory: '',
+    currentMedications: ''
+  });
   const [chatMessages, setChatMessages] = useState([
     { id: 1, text: "Hello! I'm your health assistant. How can I help you today?", sender: 'bot', time: new Date() }
   ]);
@@ -2171,6 +2185,169 @@ const PatientDashboard = () => {
     { id: 'medical-history', label: 'Medical History', icon: ChartBarIcon, gradient: 'from-indigo-500 to-indigo-600' },
   ];
 
+  // Common symptoms for quick selection
+  const commonSymptoms = [
+    'Headache', 'Fever', 'Cough', 'Sore throat', 'Nausea', 'Fatigue',
+    'Chest pain', 'Shortness of breath', 'Dizziness', 'Abdominal pain',
+    'Back pain', 'Muscle aches', 'Joint pain', 'Skin rash', 'Runny nose',
+    'Loss of appetite', 'Difficulty sleeping', 'Anxiety', 'Depression'
+  ];
+
+  // Fetch analysis history from backend
+  const fetchAnalysisHistory = async () => {
+    try {
+      const response = await fetch('/api/symptom-analysis/history', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setAnalysisHistory(result.data.analyses || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch analysis history:', error);
+    }
+  };
+
+  // Load analysis history when symptom checker is accessed
+  useEffect(() => {
+    if (activeTab === 'symptom-checker') {
+      fetchAnalysisHistory();
+    }
+  }, [activeTab]);
+
+  // AI Symptom Analysis Function
+  const analyzeSymptoms = async () => {
+    if (!symptoms.trim() && selectedSymptoms.length === 0) {
+      Swal.fire({
+        title: 'No Symptoms Provided',
+        text: 'Please describe your symptoms or select from the list.',
+        icon: 'warning'
+      });
+      return;
+    }
+
+    setIsAnalyzing(true);
+    
+    try {
+      // Get the full symptom text
+      const symptomText = symptoms || selectedSymptoms.join(', ');
+
+      // Submit to backend API
+      const response = await fetch('/api/symptom-analysis', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          symptoms: symptomText,
+          selectedSymptoms: selectedSymptoms || [],
+          severity: symptomSeverity,
+          duration: symptomDuration,
+          additionalInfo
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('API Error:', response.status, errorData);
+        throw new Error(`Server error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+      }
+      
+      const result = await response.json();
+      const analysis = result.data.analysis;
+      
+      setSymptomAnalysis(analysis);
+      
+      // Add to history
+      const newAnalysis = {
+        id: result.data.analysisId,
+        date: new Date().toISOString(),
+        symptoms: symptomText,
+        severity: symptomSeverity,
+        duration: symptomDuration,
+        analysis,
+        timestamp: new Date(),
+        isEmergency: result.data.isEmergency,
+        followUpRequired: result.data.followUpRequired
+      };
+      
+      setAnalysisHistory(prev => [newAnalysis, ...prev]);
+      
+      // Handle emergency cases
+      if (result.data.isEmergency) {
+        Swal.fire({
+          title: '🚨 Emergency Alert',
+          text: result.message,
+          icon: 'error',
+          confirmButtonColor: '#dc2626',
+          confirmButtonText: 'I Understand',
+          allowOutsideClick: false,
+          allowEscapeKey: false
+        });
+        return;
+      }
+      
+      // Show success message with urgency-based styling
+      const urgencyConfig = {
+        high: { icon: 'error', color: '#dc2626' },
+        moderate: { icon: 'warning', color: '#d97706' },
+        low: { icon: 'success', color: '#059669' }
+      };
+      
+      const config = urgencyConfig[analysis.urgencyLevel] || urgencyConfig.low;
+      
+      Swal.fire({
+        title: 'Analysis Complete',
+        text: result.message,
+        icon: config.icon,
+        confirmButtonColor: config.color,
+        timer: analysis.urgencyLevel === 'high' ? 5000 : 2000,
+        showConfirmButton: analysis.urgencyLevel === 'high'
+      });
+      
+    } catch (error) {
+      console.error('Error analyzing symptoms:', error);
+      
+      // Show detailed error message for debugging
+      const errorMessage = error.message || 'Unable to analyze symptoms at this time. Please try again or consult a healthcare provider.';
+      
+      Swal.fire({
+        title: 'Analysis Error',
+        text: errorMessage,
+        icon: 'error',
+        footer: 'Check console for more details'
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const toggleSymptom = (symptom) => {
+    setSelectedSymptoms(prev => 
+      prev.includes(symptom) 
+        ? prev.filter(s => s !== symptom)
+        : [...prev, symptom]
+    );
+  };
+
+  const clearSymptomAnalysis = () => {
+    setSymptoms('');
+    setSelectedSymptoms([]);
+    setSymptomAnalysis(null);
+    setSymptomSeverity('mild');
+    setSymptomDuration('');
+    setAdditionalInfo({
+      age: '',
+      gender: '',
+      medicalHistory: '',
+      currentMedications: ''
+    });
+  };
+
   const sendChatMessage = () => {
     if (newMessage.trim()) {
       const userMessage = {
@@ -2283,7 +2460,7 @@ const PatientDashboard = () => {
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 <Button 
-                  onClick={() => setShowSymptomChecker(true)}
+                  onClick={() => setActiveTab('symptom-checker')}
                   className="flex flex-col items-center p-4 sm:p-6 h-auto bg-gradient-to-br from-emerald-50 to-emerald-100 hover:from-emerald-100 hover:to-emerald-200 border border-emerald-200 text-emerald-800 hover:text-emerald-900 transition-all duration-300 transform hover:scale-105 hover:shadow-lg"
                   variant="outline"
                 >
@@ -4297,6 +4474,568 @@ const PatientDashboard = () => {
           </div>
         );
 
+      case 'symptom-checker':
+        return (
+          <div className="space-y-6">
+            {/* Header Section */}
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-green-600 via-emerald-600 to-teal-700 p-6">
+              <div className="relative z-10">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+                  <div>
+                    <h2 className="text-2xl md:text-3xl font-bold text-white flex items-center">
+                      <BeakerIcon className="w-8 h-8 mr-3 text-green-200" />
+                      AI Symptom Checker
+                    </h2>
+                    <p className="text-green-100 mt-2">Get intelligent health insights powered by AI technology</p>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <div className="bg-white/20 backdrop-blur-md rounded-lg px-4 py-2 text-white">
+                      <div className="text-sm font-medium">Accuracy Rate</div>
+                      <div className="text-2xl font-bold">94%</div>
+                    </div>
+                    <div className="bg-white/20 backdrop-blur-md rounded-lg px-4 py-2 text-white">
+                      <div className="text-sm font-medium">Analyses Done</div>
+                      <div className="text-2xl font-bold">{analysisHistory.length}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="absolute -right-6 -top-6 w-32 h-32 bg-white/10 rounded-full blur-xl"></div>
+              <div className="absolute -left-6 -bottom-6 w-24 h-24 bg-white/5 rounded-full blur-2xl"></div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Left Column - Symptom Input */}
+              <div className="lg:col-span-2 space-y-6">
+                <Card className="bg-white border-0 shadow-xl">
+                  <div className="p-6">
+                    <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center">
+                      <svg className="w-6 h-6 mr-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Describe Your Symptoms
+                    </h3>
+                    
+                    {/* Symptom Description */}
+                    <div className="mb-6">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Tell us what you're experiencing:
+                      </label>
+                      <textarea
+                        value={symptoms}
+                        onChange={(e) => setSymptoms(e.target.value)}
+                        placeholder="Describe your symptoms in detail... e.g., 'I have a headache that started this morning, along with a mild fever and sore throat.'"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-colors"
+                        rows={4}
+                      />
+                    </div>
+
+                    {/* Quick Symptom Selection */}
+                    <div className="mb-6">
+                      <label className="block text-sm font-medium text-gray-700 mb-3">
+                        Or select from common symptoms:
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {commonSymptoms.map((symptom) => (
+                          <button
+                            key={symptom}
+                            onClick={() => toggleSymptom(symptom)}
+                            className={`px-3 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
+                              selectedSymptoms.includes(symptom)
+                                ? 'bg-green-600 text-white shadow-md'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {symptom}
+                          </button>
+                        ))}
+                      </div>
+                      {selectedSymptoms.length > 0 && (
+                        <div className="mt-3 p-3 bg-green-50 rounded-lg">
+                          <div className="text-sm font-medium text-green-800 mb-1">Selected symptoms:</div>
+                          <div className="text-sm text-green-700">{selectedSymptoms.join(', ')}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Additional Information */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Severity Level:</label>
+                        <select
+                          value={symptomSeverity}
+                          onChange={(e) => setSymptomSeverity(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                        >
+                          <option value="mild">Mild</option>
+                          <option value="moderate">Moderate</option>
+                          <option value="severe">Severe</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Duration:</label>
+                        <select
+                          value={symptomDuration}
+                          onChange={(e) => setSymptomDuration(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                        >
+                          <option value="">Select duration</option>
+                          <option value="hours">A few hours</option>
+                          <option value="1-2days">1-2 days</option>
+                          <option value="3-7days">3-7 days</option>
+                          <option value="1-2weeks">1-2 weeks</option>
+                          <option value="longer">More than 2 weeks</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <Button
+                        onClick={analyzeSymptoms}
+                        disabled={isAnalyzing || (!symptoms.trim() && selectedSymptoms.length === 0)}
+                        className={`flex-1 flex items-center justify-center py-3 px-6 rounded-lg font-medium transition-all duration-200 ${
+                          isAnalyzing
+                            ? 'bg-green-400 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 shadow-lg hover:shadow-xl'
+                        } text-white`}
+                      >
+                        {isAnalyzing ? (
+                          <>
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Analyzing Symptoms...
+                          </>
+                        ) : (
+                          <>
+                            <BeakerIcon className="w-5 h-5 mr-2" />
+                            Analyze Symptoms with AI
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        onClick={clearSymptomAnalysis}
+                        variant="outline"
+                        className="px-6 py-3 border-gray-300 text-gray-700 hover:bg-gray-50"
+                      >
+                        Clear All
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Analysis Results */}
+                {symptomAnalysis && (
+                  <Card className="bg-white border-0 shadow-xl">
+                    <div className="p-6">
+                      <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-xl font-bold text-gray-900 flex items-center">
+                          <svg className="w-6 h-6 mr-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                          AI Analysis Results
+                        </h3>
+                        <div className={`px-3 py-1 rounded-full text-sm font-medium ${
+                          symptomAnalysis.urgencyLevel === 'high' ? 'bg-red-100 text-red-800' :
+                          symptomAnalysis.urgencyLevel === 'moderate' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-green-100 text-green-800'
+                        }`}>
+                          {symptomAnalysis.urgencyLevel === 'high' ? 'High Priority' :
+                           symptomAnalysis.urgencyLevel === 'moderate' ? 'Moderate Priority' :
+                           'Low Priority'}
+                        </div>
+                      </div>
+
+                      {/* Possible Conditions */}
+                      <div className="mb-6">
+                        <h4 className="text-lg font-semibold text-gray-900 mb-4">Possible Conditions:</h4>
+                        <div className="space-y-3">
+                          {symptomAnalysis.possibleConditions.map((condition, index) => (
+                            <div key={index} className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                              <div className="flex items-center justify-between mb-2">
+                                <h5 className="font-semibold text-blue-900">{condition.condition}</h5>
+                                <div className="bg-blue-600 text-white px-2 py-1 rounded-full text-xs font-medium">
+                                  {condition.confidence}% confidence
+                                </div>
+                              </div>
+                              <p className="text-blue-800 text-sm">{condition.description}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Recommendations */}
+                      <div className="mb-6">
+                        <h4 className="text-lg font-semibold text-gray-900 mb-4">Recommendations:</h4>
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                          <ul className="space-y-2">
+                            {symptomAnalysis.recommendations.map((recommendation, index) => (
+                              <li key={index} className="flex items-start text-green-800">
+                                <svg className="w-5 h-5 mr-2 mt-0.5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span className="text-sm">{recommendation}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+
+                      {/* Disclaimer */}
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <div className="flex items-start">
+                          <svg className="w-5 h-5 mr-2 mt-0.5 text-yellow-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                          </svg>
+                          <div>
+                            <h5 className="font-medium text-yellow-800 mb-1">Important Disclaimer</h5>
+                            <p className="text-yellow-700 text-sm">{symptomAnalysis.disclaimer}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex flex-col sm:flex-row gap-3 mt-6">
+                        <Button
+                          onClick={() => setActiveTab('appointments')}
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 px-6 rounded-lg font-medium"
+                        >
+                          <CalendarDaysIcon className="w-5 h-5 mr-2" />
+                          Book Doctor Appointment
+                        </Button>
+                        <Button
+                          onClick={() => setShowChatbot(true)}
+                          variant="outline"
+                          className="flex-1 border-green-300 text-green-700 hover:bg-green-50 py-3 px-6"
+                        >
+                          <ChatBubbleLeftIcon className="w-5 h-5 mr-2" />
+                          Ask Health Assistant
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                )}
+              </div>
+
+              {/* Right Column - Analysis History and Tips */}
+              <div className="space-y-6">
+                {/* Health Tips */}
+                <Card className="bg-gradient-to-br from-purple-50 to-indigo-50 border-0 shadow-lg">
+                  <div className="p-6">
+                    <h3 className="text-lg font-bold text-purple-900 mb-4 flex items-center">
+                      <svg className="w-5 h-5 mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                      Health Tips
+                    </h3>
+                    <div className="space-y-3 text-sm">
+                      <div className="bg-white rounded-lg p-3 border border-purple-200">
+                        <div className="font-medium text-purple-900 mb-1">💡 Prevention</div>
+                        <div className="text-purple-700">Maintain good hygiene and get adequate sleep to boost immunity.</div>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 border border-purple-200">
+                        <div className="font-medium text-purple-900 mb-1">🏃‍♀️ Exercise</div>
+                        <div className="text-purple-700">Regular physical activity improves overall health and reduces disease risk.</div>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 border border-purple-200">
+                        <div className="font-medium text-purple-900 mb-1">🥗 Nutrition</div>
+                        <div className="text-purple-700">Eat a balanced diet rich in fruits, vegetables, and whole grains.</div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Analysis History */}
+                <Card className="bg-white border-0 shadow-lg">
+                  <div className="p-6">
+                    <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                      <ClockIcon className="w-5 h-5 mr-2 text-gray-600" />
+                      Analysis History
+                    </h3>
+                    {analysisHistory.length > 0 ? (
+                      <div className="space-y-3 max-h-80 overflow-y-auto">
+                        {analysisHistory.slice(0, 5).map((analysis) => (
+                          <div key={analysis.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="text-sm font-medium text-gray-900">
+                                {new Date(analysis.date).toLocaleDateString()}
+                              </div>
+                              <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                analysis.analysis.urgencyLevel === 'high' ? 'bg-red-100 text-red-800' :
+                                analysis.analysis.urgencyLevel === 'moderate' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-green-100 text-green-800'
+                              }`}>
+                                {analysis.analysis.urgencyLevel}
+                              </div>
+                            </div>
+                            <div className="text-xs text-gray-700 mb-1">
+                              <strong>Symptoms:</strong> {analysis.symptoms.substring(0, 100)}{analysis.symptoms.length > 100 ? '...' : ''}
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              <strong>Top condition:</strong> {analysis.analysis.possibleConditions[0]?.condition}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-6">
+                        <svg className="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        <div className="text-sm text-gray-500">No analysis history yet</div>
+                        <div className="text-xs text-gray-400 mt-1">Your symptom analyses will appear here</div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+
+                {/* Emergency Contact */}
+                <Card className="bg-red-50 border border-red-200">
+                  <div className="p-6">
+                    <h3 className="text-lg font-bold text-red-900 mb-4 flex items-center">
+                      <ExclamationTriangleIcon className="w-5 h-5 mr-2 text-red-600" />
+                      Emergency
+                    </h3>
+                    <div className="text-sm text-red-800 mb-4">
+                      If you're experiencing a medical emergency, don't use this tool.
+                    </div>
+                    <Button className="w-full bg-red-600 hover:bg-red-700 text-white py-3 font-bold">
+                      <PhoneIcon className="w-5 h-5 mr-2" />
+                      Call Emergency: 911
+                    </Button>
+                  </div>
+                </Card>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'profile':
+        return (
+          <div className="max-w-4xl mx-auto space-y-6">
+            {/* Profile Header */}
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 via-purple-600 to-indigo-700 p-6">
+              <div className="relative z-10">
+                <div className="flex flex-col md:flex-row md:items-center gap-4">
+                  <div className="w-20 h-20 md:w-24 md:h-24 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center">
+                    <UserIcon className="w-10 h-10 md:w-12 md:h-12 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h1 className="text-2xl md:text-3xl font-bold text-white">
+                      {user?.firstName} {user?.lastName}
+                    </h1>
+                    <p className="text-blue-100 mt-1 capitalize">{user?.userType || user?.role} Account</p>
+                    <div className="flex items-center mt-2 text-blue-200">
+                      <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+                        <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                      </svg>
+                      {user?.email}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Decorative elements */}
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-purple-600/20" />
+              <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-xl" />
+              <div className="absolute -left-4 -bottom-4 w-16 h-16 bg-white/5 rounded-full blur-2xl" />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Personal Information */}
+              <div className="lg:col-span-2">
+                <Card>
+                  <div className="p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                      <UserIcon className="w-5 h-5 mr-2 text-blue-600" />
+                      Personal Information
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                        <div className="p-3 bg-gray-50 rounded-lg border">
+                          {user?.firstName || 'Not provided'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                        <div className="p-3 bg-gray-50 rounded-lg border">
+                          {user?.lastName || 'Not provided'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <div className="p-3 bg-gray-50 rounded-lg border">
+                          {user?.email || 'Not provided'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                        <div className="p-3 bg-gray-50 rounded-lg border">
+                          {user?.phone || 'Not provided'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
+                        <div className="p-3 bg-gray-50 rounded-lg border">
+                          {user?.dateOfBirth ? new Date(user.dateOfBirth).toLocaleDateString() : 'Not provided'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+                        <div className="p-3 bg-gray-50 rounded-lg border capitalize">
+                          {user?.gender || 'Not provided'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Quick Stats & Medical Info */}
+              <div className="space-y-6">
+                {/* Account Status */}
+                <Card>
+                  <div className="p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Account Status</h3>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">Account Type</span>
+                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium capitalize">
+                          {user?.userType || user?.role}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">Status</span>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          user?.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>
+                          {user?.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">Email Verified</span>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          user?.isEmailVerified ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {user?.isEmailVerified ? 'Verified' : 'Pending'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Medical Information */}
+                {user?.userType === 'patient' && (
+                  <Card>
+                    <div className="p-6">
+                      <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                        <BeakerIcon className="w-5 h-5 mr-2 text-red-600" />
+                        Medical Information
+                      </h3>
+                      <div className="space-y-3">
+                        <div>
+                          <span className="block text-sm font-medium text-gray-700 mb-1">Blood Group</span>
+                          <div className="p-2 bg-red-50 rounded-lg border border-red-200 text-center font-medium text-red-800">
+                            {user?.bloodGroup || 'Not specified'}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="block text-sm font-medium text-gray-700 mb-1">Known Allergies</span>
+                          <div className="p-2 bg-yellow-50 rounded-lg border border-yellow-200 text-sm">
+                            {user?.knownAllergies || 'None reported'}
+                          </div>
+                        </div>
+                        {user?.emergencyContact && (
+                          <div>
+                            <span className="block text-sm font-medium text-gray-700 mb-2">Emergency Contact</span>
+                            <div className="p-3 bg-gray-50 rounded-lg border text-sm space-y-1">
+                              <div><strong>{user.emergencyContact.name}</strong></div>
+                              <div className="text-gray-600">{user.emergencyContact.relationship}</div>
+                              <div className="text-gray-600">{user.emergencyContact.phone}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                )}
+              </div>
+            </div>
+
+            {/* Medical History */}
+            {user?.userType === 'patient' && user?.medicalHistory && user.medicalHistory.length > 0 && (
+              <Card>
+                <div className="p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <ClipboardDocumentListIcon className="w-5 h-5 mr-2 text-green-600" />
+                    Medical History
+                  </h3>
+                  <div className="space-y-4">
+                    {user.medicalHistory.map((item, index) => (
+                      <div key={index} className="border border-gray-200 rounded-lg p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <h4 className="font-medium text-gray-900">{item.condition}</h4>
+                          <span className="text-sm text-gray-500">
+                            {item.diagnosedDate ? new Date(item.diagnosedDate).toLocaleDateString() : ''}
+                          </span>
+                        </div>
+                        {item.treatment && (
+                          <p className="text-sm text-gray-600 mb-1">
+                            <strong>Treatment:</strong> {item.treatment}
+                          </p>
+                        )}
+                        {item.doctor && (
+                          <p className="text-sm text-gray-600">
+                            <strong>Doctor:</strong> {item.doctor}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* Action Buttons */}
+            <Card>
+              <div className="p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Account Actions</h3>
+                <div className="flex flex-wrap gap-3">
+                  <Button 
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                    onClick={() => {
+                      // TODO: Implement edit profile functionality
+                      alert('Edit profile functionality coming soon!');
+                    }}
+                  >
+                    <PencilSquareIcon className="w-4 h-4 mr-2" />
+                    Edit Profile
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                    onClick={() => setActiveTab('settings')}
+                  >
+                    <CogIcon className="w-4 h-4 mr-2" />
+                    Account Settings
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="border-red-300 text-red-700 hover:bg-red-50"
+                    onClick={handleLogout}
+                  >
+                    <ArrowRightOnRectangleIcon className="w-4 h-4 mr-2" />
+                    Sign Out
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        );
+
       default:
         return (
           <Card title={`${sidebarItems.find(item => item.id === activeTab)?.label || 'Feature'}`}>
@@ -4437,7 +5176,6 @@ const PatientDashboard = () => {
                     <div className="text-sm font-semibold text-gray-900">
                       {user?.firstName} {user?.lastName || user?.name}
                     </div>
-                    <div className="text-xs text-gray-500">ID: #P{user?.id || '12345'}</div>
                   </div>
                   <ChevronDownIcon className="w-4 h-4" />
                 </button>
@@ -4448,23 +5186,12 @@ const PatientDashboard = () => {
                     <button
                       onClick={() => {
                         setShowProfileDropdown(false);
-                        // Add profile navigation logic here
+                        setActiveTab('profile');
                       }}
                       className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200"
                     >
                       <UserIcon className="w-4 h-4 mr-3 text-gray-500" />
-                      View Profile
-                    </button>
-                    
-                    <button
-                      onClick={() => {
-                        setShowProfileDropdown(false);
-                        // Add settings navigation logic here
-                      }}
-                      className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200"
-                    >
-                      <Cog6ToothIcon className="w-4 h-4 mr-3 text-gray-500" />
-                      Settings
+                      Profile
                     </button>
                     
                     <hr className="my-2" />
@@ -4629,20 +5356,150 @@ const PatientDashboard = () => {
               value={symptoms}
               onChange={(e) => setSymptoms(e.target.value)}
               placeholder="E.g., I have a headache, fever, and sore throat..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500"
               rows={4}
             />
           </div>
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <h4 className="font-medium text-blue-900 mb-2">🤖 AI Analysis:</h4>
-            <p className="text-blue-800 text-sm">
-              Based on your symptoms, you might have a viral infection (85% confidence). 
-              Recommended: Rest, stay hydrated, and consult with a general physician if symptoms persist.
-            </p>
+          
+          {/* Quick Symptom Selection in Modal */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Or select common symptoms:
+            </label>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {commonSymptoms.slice(0, 8).map((symptom) => (
+                <button
+                  key={symptom}
+                  onClick={() => toggleSymptom(symptom)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all $${
+                    selectedSymptoms.includes(symptom)
+                      ? 'bg-green-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {symptom}
+                </button>
+              ))}
+            </div>
+            {selectedSymptoms.length > 0 && (
+              <div className="text-sm text-green-700 bg-green-50 p-2 rounded">
+                Selected: {selectedSymptoms.join(', ')}
+              </div>
+            )}
           </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Severity:</label>
+              <select
+                value={symptomSeverity}
+                onChange={(e) => setSymptomSeverity(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500"
+              >
+                <option value="mild">Mild</option>
+                <option value="moderate">Moderate</option>
+                <option value="severe">Severe</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Duration:</label>
+              <select
+                value={symptomDuration}
+                onChange={(e) => setSymptomDuration(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500"
+              >
+                <option value="">Select duration</option>
+                <option value="hours">A few hours</option>
+                <option value="1-2days">1-2 days</option>
+                <option value="3-7days">3-7 days</option>
+                <option value="longer">More than a week</option>
+              </select>
+            </div>
+          </div>
+
+          {symptomAnalysis ? (
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <h4 className="font-medium text-blue-900 mb-3 flex items-center">
+                <BeakerIcon className="w-5 h-5 mr-2" />
+                AI Analysis Results
+              </h4>
+              
+              {/* Possible Conditions */}
+              <div className="mb-4">
+                <h5 className="font-medium text-blue-800 mb-2">Possible Conditions:</h5>
+                {symptomAnalysis.possibleConditions.map((condition, index) => (
+                  <div key={index} className="bg-white p-3 rounded mb-2">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-medium text-gray-900">{condition.condition}</span>
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs">
+                        {condition.confidence}%
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-700">{condition.description}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Recommendations */}
+              <div className="mb-4">
+                <h5 className="font-medium text-blue-800 mb-2">Recommendations:</h5>
+                <ul className="space-y-1">
+                  {symptomAnalysis.recommendations.slice(0, 3).map((recommendation, index) => (
+                    <li key={index} className="flex items-start text-blue-700 text-sm">
+                      <CheckCircleIcon className="w-4 h-4 mr-2 mt-0.5 text-green-600 flex-shrink-0" />
+                      {recommendation}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-yellow-100 p-3 rounded mt-3">
+                <p className="text-yellow-800 text-xs">
+                  <ExclamationTriangleIcon className="w-4 h-4 inline mr-1" />
+                  {symptomAnalysis.disclaimer}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-green-50 p-4 rounded-lg">
+              <h4 className="font-medium text-green-900 mb-2">🤖 AI Ready for Analysis</h4>
+              <p className="text-green-800 text-sm">
+                Describe your symptoms above and click "Analyze" to get AI-powered insights.
+              </p>
+            </div>
+          )}
+          
           <div className="flex space-x-3">
-            <Button onClick={() => setActiveTab('appointments')}>Book Appointment</Button>
-            <Button variant="outline" onClick={() => setShowSymptomChecker(false)}>Close</Button>
+            <Button 
+              onClick={analyzeSymptoms}
+              disabled={isAnalyzing || (!symptoms.trim() && selectedSymptoms.length === 0)}
+              className={`flex-1 ${isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {isAnalyzing ? (
+                <>
+                  <ArrowPathIcon className="w-4 h-4 mr-2 animate-spin" />
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  <BeakerIcon className="w-4 h-4 mr-2" />
+                  Analyze Symptoms
+                </>
+              )}
+            </Button>
+            <Button 
+              onClick={() => {
+                setActiveTab('symptom-checker');
+                setShowSymptomChecker(false);
+              }}
+              variant="outline"
+              className="border-green-300 text-green-700 hover:bg-green-50"
+            >
+              Full Checker
+            </Button>
+            <Button variant="outline" onClick={() => setShowSymptomChecker(false)}>
+              Close
+            </Button>
           </div>
         </div>
       </Modal>
